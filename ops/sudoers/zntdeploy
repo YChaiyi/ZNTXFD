@@ -1,0 +1,2 @@
+Defaults:zntdeploy !requiretty
+zntdeploy ALL=(root) NOPASSWD: NOSETENV: /usr/local/bin/znt-code-deploy *

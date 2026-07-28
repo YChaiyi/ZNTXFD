@@ -1,0 +1,131 @@
+#!/bin/bash
+set -euo pipefail
+
+LIB_DIR="${ZNT_LIB_DIR:-/usr/local/lib/znt}"
+# shellcheck source=/usr/local/lib/znt/deploy-common.sh
+source "$LIB_DIR/deploy-common.sh"
+
+STAGING_DIR="${1:-}"
+TARGET_DATE="${2:-}"
+KEEP="${3:-30}"
+ROOT="${ZNT_ROOT:-/var/www/znt.group}"
+CONTENT_ROOT="$ROOT/shared/content"
+STAGING_ROOT="$CONTENT_ROOT/staging"
+RELEASES="$CONTENT_ROOT/releases"
+PROMOTION_ROOT="$CONTENT_ROOT/.promotion"
+CURRENT="$CONTENT_ROOT/current"
+STATE="$ROOT/shared/deploy-state.json"
+VALIDATOR="$LIB_DIR/validate-content-bundle.mjs"
+NODE_BIN="$ZNT_NODE_BIN"
+
+switched=0
+new_release=""
+staging_real=""
+candidate=""
+received_candidate=""
+previous_code_sha=""
+previous_code=""
+previous_content_version=""
+previous_content=""
+staging_version=""
+
+assert_root_owned_file() {
+  local path="$1"
+  local owner mode
+  [[ -f "$path" && ! -L "$path" ]] || znt_fail "required root-owned file is missing: $path"
+  owner="$(stat -c '%U:%G' "$path")"
+  mode="$(stat -c '%a' "$path")"
+  [[ "$owner" = "root:root" ]] || znt_fail "required file is not root-owned: $path"
+  (( (8#$mode & 0022) == 0 )) || znt_fail "required file is writable by group or others: $path"
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if (( status != 0 && switched == 1 )) && [[ -n "$previous_content" ]]; then
+    znt_switch_link "$previous_content" "$CURRENT" || true
+  fi
+  znt_lock_release
+  [[ -z "$candidate" || ! -e "$candidate" ]] || rm -rf -- "$candidate"
+  [[ -z "$received_candidate" || ! -e "$received_candidate" ]] || rm -rf -- "$received_candidate"
+  if (( status != 0 )) && [[ -n "$new_release" && -d "$new_release" ]]; then
+    if [[ "$(znt_realpath "$CURRENT" 2>/dev/null || true)" != "$(znt_realpath "$new_release")" ]]; then
+      rm -rf -- "$new_release"
+    fi
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+
+znt_require_root
+znt_require_node_runtime
+[[ $# -eq 3 ]] || znt_fail "usage: znt-content-promote STAGING_DIR TARGET_DATE KEEP"
+[[ "$KEEP" =~ ^[0-9]+$ && "$KEEP" -ge 1 && "$KEEP" -le 365 ]] \
+  || znt_fail "invalid content retention count"
+[[ -z "$TARGET_DATE" || "$TARGET_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+  || znt_fail "invalid representative date"
+assert_root_owned_file "$VALIDATOR"
+[[ -d "$STAGING_ROOT" && -d "$RELEASES" ]] || znt_fail "content layout is not initialized"
+[[ -d "$STAGING_DIR" && ! -L "$STAGING_DIR" ]] || znt_fail "staging directory is invalid"
+znt_path_is_direct_child "$STAGING_ROOT" "$STAGING_DIR" \
+  || znt_fail "staging path must be a direct child of the staging root"
+staging_real="$(znt_realpath "$STAGING_DIR")"
+staging_version="$(basename "$staging_real")"
+[[ "$staging_version" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
+  || znt_fail "staging directory has an invalid content version"
+[[ "$(stat -c '%U' "$staging_real")" = "zntcontent" ]] \
+  || znt_fail "staging directory must be owned by zntcontent"
+[[ -f "$staging_real/manifest.json" ]] || znt_fail "manifest.json is missing"
+
+znt_lock_acquire "$ROOT" content-promote
+
+# Move the completed upload under a root-only parent before copying it into the
+# release candidate. The uploader owns the public staging parent and could
+# otherwise rename a path or keep a writable descriptor between checks.
+install -d -o root -g root -m 0700 "$PROMOTION_ROOT"
+received_candidate="$(mktemp -d "$PROMOTION_ROOT/.candidate.XXXXXX")"
+rmdir "$received_candidate"
+mv -- "$staging_real" "$received_candidate"
+[[ -d "$received_candidate" && ! -L "$received_candidate" ]] || znt_fail "isolated content candidate is invalid"
+candidate="$(mktemp -d "$RELEASES/.candidate.XXXXXX")"
+rsync -a --no-specials --no-devices "$received_candidate/" "$candidate/"
+rm -rf -- "$received_candidate"
+received_candidate=""
+if find -P "$candidate" -xdev -type l -print -quit | grep -q .; then
+  znt_fail "content staging directory contains a symbolic link"
+fi
+if find -P "$candidate" -xdev ! -type d ! -type f -print -quit | grep -q .; then
+  znt_fail "content staging directory contains an unsupported filesystem entry"
+fi
+chown -hR root:zntapp "$candidate"
+find -P "$candidate" -type d -exec chmod 0750 {} +
+find -P "$candidate" -type f -exec chmod 0640 {} +
+"$NODE_BIN" "$VALIDATOR" "$candidate" "$TARGET_DATE"
+
+version="$(znt_manifest_value "$candidate/manifest.json" contentVersion)" || znt_fail "content manifest has no version"
+[[ "$version" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || znt_fail "invalid content version"
+[[ "$version" = "$staging_version" ]] || znt_fail "staging and manifest content versions do not match"
+release="$RELEASES/$version"
+[[ ! -e "$release" ]] || znt_fail "content version already exists"
+
+pair="$(znt_current_pair "$ROOT")"
+IFS=$'\t' read -r previous_code_sha previous_code previous_content_version previous_content <<< "$pair"
+mv "$candidate" "$release"
+candidate=""
+new_release="$release"
+znt_switch_link "$release" "$CURRENT"
+switched=1
+znt_content_smoke "$version" || znt_fail "new content did not become ready; previous content was restored"
+
+znt_write_state "$STATE" "$previous_code_sha" "$previous_code" "$version" "$release" \
+  "$previous_code_sha" "$previous_code" "$previous_content_version" "$previous_content"
+# Promotion is committed once both the pointer and state file agree. Do not
+# undo only the pointer if the caller disconnects during final output.
+switched=0
+new_release=""
+
+if ! znt_prune_releases "$RELEASES" "$CURRENT" "$previous_content" "$KEEP" "$RELEASES/.protected"; then
+  echo "znt-content-promote: warning: content release retention cleanup failed" >&2
+fi
+znt_lock_release
+echo "promoted content version=$version code=$previous_code_sha"

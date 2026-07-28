@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Enforce tracked source-only policy
+        run: bash scripts/check_source_only.sh --tracked-only
+      - name: Create and compare source-only tree
+        run: |
+          bash scripts/create_source_only_tree.sh "$RUNNER_TEMP/znt-source"
+          bash "$RUNNER_TEMP/znt-source/scripts/check_source_only.sh"
+          git ls-files | LC_ALL=C sort > "$RUNNER_TEMP/repository-files"
+          git -C "$RUNNER_TEMP/znt-source" ls-files | LC_ALL=C sort > "$RUNNER_TEMP/source-files"
+          cmp "$RUNNER_TEMP/repository-files" "$RUNNER_TEMP/source-files"
+      - name: Scan tracked history for secrets
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install and validate source-only tree
+        env:
+          ACCESS_PASSWORD: ci-password
+          ACCESS_SESSION_SECRET: ci-session-secret-with-at-least-32-characters
+          TOKEN_RANK_STORE_PATH: ${{ runner.temp }}/token-rank-store.json
+        run: |
+          cd "$RUNNER_TEMP/znt-source"
+          npm ci
+          npm run typecheck
+          npm run lint
+          npm test
+          npm run build
+
+  deploy:
+    if: >-
+      github.repository == 'YChaiyi/ZNTXFD' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      vars.ZNT_DEPLOY_ENABLED == 'true'
+    needs: source
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: znt-production-code
+      cancel-in-progress: false
+    steps:
+      - name: Configure restricted SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.ZNT_DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.ZNT_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Request deployment of the exact public main SHA
+        env:
+          DEPLOY_HOST: ${{ secrets.ZNT_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.ZNT_DEPLOY_USER }}
+        run: |
+          ssh -T -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -o ConnectTimeout=15 \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "deploy-code ${GITHUB_SHA}"

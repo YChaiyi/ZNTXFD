@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  background: #0a0a0c;
+  color: #f1f1f4;
+}
+
+body {
+  min-height: 100vh;
+  background: #0a0a0c;
+  color: #f1f1f4;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: #ff9f3a;
+  text-decoration: none;
+}
+
+::selection {
+  background: #ff6a00;
+  color: #0a0a0c;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0c;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a2a31;
+  border: 2px solid #0a0a0c;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a42;
+}
+
+@layer components {
+  .glass {
+    border: 0.5px solid rgba(255, 255, 255, 0.08);
+    background: rgba(18, 18, 23, 0.74);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .glass-card {
+    border: 0.5px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    background: rgba(18, 18, 23, 0.8);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .glow-border {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .glow-border::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    z-index: -1;
+    border-radius: inherit;
+    background: linear-gradient(
+      135deg,
+      rgba(255, 106, 0, 0.48),
+      rgba(2, 192, 118, 0.22),
+      rgba(255, 165, 61, 0.28)
+    );
+    opacity: 0.65;
+    filter: blur(10px);
+    animation: glow 4s ease-in-out infinite;
+  }
+
+  .tag-pill {
+    display: inline-flex;
+    align-items: center;
+    border: 0.5px solid rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
+    background: #202027;
+    color: #bcbcc4;
+  }
+
+  .card-hover {
+    transition:
+      transform 0.2s ease,
+      border-color 0.2s ease,
+      background-color 0.2s ease,
+      box-shadow 0.2s ease;
+  }
+
+  .card-hover:hover {
+    transform: translateY(-2px);
+  }
+
+  .pulse-dot {
+    display: inline-flex;
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: #02c076;
+    box-shadow: 0 0 0 0 rgba(2, 192, 118, 0.55);
+    animation: pulse 1.8s ease-out infinite;
+  }
+
+  .mono-num {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(2, 192, 118, 0.55);
+  }
+
+  70% {
+    box-shadow: 0 0 0 7px rgba(2, 192, 118, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(2, 192, 118, 0);
+  }
+}

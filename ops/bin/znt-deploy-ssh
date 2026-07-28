@@ -1,0 +1,48 @@
+#!/bin/bash
+set -euo pipefail
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+ROOT="/var/www/znt.group"
+UPLOAD_LOCK="/var/lib/znt-upload-locks/global.lock"
+MIN_FREE_KIB=12582912
+ORIGINAL_COMMAND="${SSH_ORIGINAL_COMMAND:-}"
+
+fail() {
+  echo "znt-deploy-ssh: $*" >&2
+  exit 1
+}
+
+[[ "$(id -un)" = "zntdeploy" ]] || fail "unexpected account"
+[[ "$ORIGINAL_COMMAND" != *$'\n'* && "$ORIGINAL_COMMAND" != *$'\r'* ]] \
+  || fail "invalid command"
+[[ -f "$UPLOAD_LOCK" && ! -L "$UPLOAD_LOCK" ]] || fail "global upload lock is unavailable"
+[[ "$(stat -c '%U:%G' "$UPLOAD_LOCK")" = "root:zntupload" ]] \
+  || fail "global upload lock ownership is invalid"
+exec {UPLOAD_LOCK_FD}>> "$UPLOAD_LOCK"
+if ! /usr/bin/flock -n "$UPLOAD_LOCK_FD"; then
+  echo "znt-deploy-ssh: waiting for the active ZNT upload or promotion" >&2
+  /usr/bin/flock -w 7200 "$UPLOAD_LOCK_FD" || fail "timed out waiting for the ZNT upload lock"
+fi
+
+free_kib="$(df -Pk "$ROOT" | awk 'END {print $4}')"
+[[ "$free_kib" =~ ^[0-9]+$ && "$free_kib" -ge "$MIN_FREE_KIB" ]] \
+  || fail "insufficient reserved disk space"
+
+read -r verb first second extra <<< "$ORIGINAL_COMMAND"
+[[ -z "${extra:-}" ]] || fail "invalid command"
+
+case "${verb:-}" in
+  deploy-code)
+    sha="${first:-}"
+    [[ -z "${second:-}" && "$sha" =~ ^[0-9a-f]{40}$ ]] \
+      || fail "invalid deployment request"
+    (
+      exec {UPLOAD_LOCK_FD}>&-
+      exec /usr/bin/sudo -n /usr/local/bin/znt-code-deploy "$sha"
+    )
+    ;;
+  *)
+    fail "command is not allowed"
+    ;;
+esac

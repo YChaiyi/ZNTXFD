@@ -1,0 +1,2 @@
+Defaults:zntcontent !requiretty
+zntcontent ALL=(root) NOPASSWD: NOSETENV: /usr/local/bin/znt-content-promote *

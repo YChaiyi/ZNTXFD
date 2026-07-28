@@ -1,0 +1,114 @@
+#!/bin/bash
+set -euo pipefail
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+ROOT="/var/www/znt.group"
+STAGING_ROOT="$ROOT/shared/content/staging"
+EXTRACTOR="/usr/local/lib/znt/extract-content-archive.py"
+UPLOAD_LOCK="/var/lib/znt-upload-locks/global.lock"
+MAX_ARCHIVE_BYTES=536870912
+MIN_FREE_KIB=12582912
+MAX_PENDING_VERSIONS=2
+ORIGINAL_COMMAND="${SSH_ORIGINAL_COMMAND:-}"
+
+fail() {
+  echo "znt-content-ssh: $*" >&2
+  exit 1
+}
+
+valid_version() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+}
+
+[[ "$(id -un)" = "zntcontent" ]] || fail "unexpected account"
+[[ "$ORIGINAL_COMMAND" != *$'\n'* && "$ORIGINAL_COMMAND" != *$'\r'* ]] \
+  || fail "invalid command"
+[[ -d "$STAGING_ROOT" && ! -L "$STAGING_ROOT" ]] || fail "staging directory is unavailable"
+[[ -x "$EXTRACTOR" && ! -L "$EXTRACTOR" ]] || fail "content extractor is unavailable"
+[[ "$(stat -c '%U:%G' "$EXTRACTOR")" = "root:root" ]] || fail "content extractor must be root-owned"
+extractor_mode="$(stat -c '%a' "$EXTRACTOR")"
+(( (8#$extractor_mode & 0022) == 0 )) || fail "content extractor is writable by a non-root account"
+[[ -f "$UPLOAD_LOCK" && ! -L "$UPLOAD_LOCK" ]] || fail "global upload lock is unavailable"
+[[ "$(stat -c '%U:%G' "$UPLOAD_LOCK")" = "root:zntupload" ]] \
+  || fail "global upload lock ownership is invalid"
+exec {UPLOAD_LOCK_FD}>> "$UPLOAD_LOCK"
+if ! /usr/bin/flock -n "$UPLOAD_LOCK_FD"; then
+  echo "znt-content-ssh: waiting for the active ZNT code or content operation" >&2
+  /usr/bin/flock -w 7200 "$UPLOAD_LOCK_FD" || fail "timed out waiting for the ZNT upload lock"
+fi
+
+free_kib="$(df -Pk "$ROOT" | awk 'END {print $4}')"
+[[ "$free_kib" =~ ^[0-9]+$ && "$free_kib" -ge "$MIN_FREE_KIB" ]] \
+  || fail "insufficient reserved disk space"
+
+read -r verb first second third extra <<< "$ORIGINAL_COMMAND"
+[[ -z "${extra:-}" ]] || fail "invalid command"
+
+case "${verb:-}" in
+  upload-content)
+    version="${first:-}"
+    [[ -z "${second:-}" && -z "${third:-}" ]] || fail "invalid upload request"
+    valid_version "$version" || fail "invalid content version"
+    find -P "$STAGING_ROOT" -maxdepth 1 -type f -user zntcontent -name '.upload-*' -mmin +120 -delete
+    find -P "$STAGING_ROOT" -maxdepth 1 -type d -user zntcontent -name '.incoming-*' -mmin +120 -exec rm -rf -- {} +
+    while IFS= read -r -d '' stale; do
+      stale_version="${stale##*/}"
+      if valid_version "$stale_version"; then
+        rm -rf -- "$stale"
+      fi
+    done < <(find -P "$STAGING_ROOT" -mindepth 1 -maxdepth 1 -type d -user zntcontent ! -name '.*' -mmin +1440 -print0)
+
+    target="$STAGING_ROOT/$version"
+    [[ ! -e "$target" ]] || fail "content version already exists in staging"
+    pending="$(find -P "$STAGING_ROOT" -mindepth 1 -maxdepth 1 -type d -user zntcontent ! -name '.*' | wc -l | tr -d ' ')"
+    [[ "$pending" =~ ^[0-9]+$ && "$pending" -lt "$MAX_PENDING_VERSIONS" ]] \
+      || fail "too many pending content versions"
+
+    archive="$(mktemp "$STAGING_ROOT/.upload-$version.XXXXXX.tar.gz")"
+    candidate="$(mktemp -d "$STAGING_ROOT/.incoming-$version.XXXXXX")"
+    cleanup() {
+      rm -f -- "${archive:-}"
+      rm -rf -- "${candidate:-}"
+    }
+    trap cleanup EXIT
+
+    /usr/bin/timeout --signal=TERM 1800 /usr/bin/head -c "$((MAX_ARCHIVE_BYTES + 1))" \
+      > "$archive" || fail "content upload timed out"
+    size="$(stat -c '%s' "$archive")"
+    (( size <= MAX_ARCHIVE_BYTES )) || fail "content archive exceeds the upload limit"
+    [[ "$size" -gt 0 ]] || fail "content archive is empty"
+    chmod 0600 "$archive"
+    free_kib="$(df -Pk "$ROOT" | awk 'END {print $4}')"
+    [[ "$free_kib" =~ ^[0-9]+$ && "$free_kib" -ge "$MIN_FREE_KIB" ]] \
+      || fail "insufficient reserved disk space after upload"
+    (
+      ulimit -t 300
+      ulimit -v 786432
+      /usr/bin/python3 "$EXTRACTOR" "$archive" "$candidate"
+    )
+    mv -- "$candidate" "$target"
+    candidate=""
+    rm -f -- "$archive"
+    archive=""
+    trap - EXIT
+    echo "received content version=$version bytes=$size"
+    ;;
+  promote-content)
+    version="${first:-}"
+    target_date="${second:-}"
+    keep="${third:-}"
+    valid_version "$version" || fail "invalid content version"
+    [[ "$target_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || fail "invalid representative date"
+    [[ "$keep" =~ ^[0-9]+$ && "$keep" -ge 1 && "$keep" -le 365 ]] \
+      || fail "invalid retention count"
+    staging="$STAGING_ROOT/$version"
+    (
+      exec {UPLOAD_LOCK_FD}>&-
+      exec /usr/bin/sudo -n /usr/local/bin/znt-content-promote "$staging" "$target_date" "$keep"
+    )
+    ;;
+  *)
+    fail "command is not allowed"
+    ;;
+esac

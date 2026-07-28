@@ -1,0 +1,25 @@
+#!/bin/bash
+set -euo pipefail
+
+NODE_BIN="/usr/local/bin/node"
+NPM_BIN="/usr/local/bin/npm"
+NODE_MAJOR="24"
+
+[[ -x "$NODE_BIN" && -x "$NPM_BIN" ]] || { echo "Node.js runtime is missing" >&2; exit 1; }
+[[ "$("$NODE_BIN" -p 'process.versions.node.split(".")[0]')" = "$NODE_MAJOR" ]] \
+  || { echo "Node.js major must be $NODE_MAJOR" >&2; exit 1; }
+
+release="$(readlink -f /var/www/znt.group/current)"
+sha="$(basename "$release")"
+[[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid active release: $release" >&2; exit 1; }
+store_path="${TOKEN_RANK_STORE_PATH:-}"
+[[ -n "$store_path" ]] || { echo "TOKEN_RANK_STORE_PATH is not configured" >&2; exit 1; }
+[[ -d "$(dirname "$store_path")" && -w "$(dirname "$store_path")" ]] \
+  || { echo "Token Rank state directory is not writable: $(dirname "$store_path")" >&2; exit 1; }
+[[ -f "$store_path" && -r "$store_path" && -w "$store_path" ]] \
+  || { echo "Token Rank store is not readable and writable: $store_path" >&2; exit 1; }
+"$NODE_BIN" -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$store_path" \
+  || { echo "Token Rank store is not valid JSON: $store_path" >&2; exit 1; }
+export BUILD_SHA="$sha"
+cd "$release"
+exec "$NPM_BIN" start

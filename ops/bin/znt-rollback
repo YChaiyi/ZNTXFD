@@ -1,0 +1,74 @@
+#!/bin/bash
+set -euo pipefail
+
+LIB_DIR="${ZNT_LIB_DIR:-/usr/local/lib/znt}"
+# shellcheck source=/usr/local/lib/znt/deploy-common.sh
+source "$LIB_DIR/deploy-common.sh"
+
+ROOT="${ZNT_ROOT:-/var/www/znt.group}"
+STATE="$ROOT/shared/deploy-state.json"
+CURRENT="$ROOT/current"
+CONTENT_CURRENT="$ROOT/shared/content/current"
+SERVICE="${ZNT_SERVICE:-znt-group.service}"
+
+switched=0
+service_stopped=0
+before_sha=""
+before_code=""
+before_content_version=""
+before_content=""
+
+restore_before_pair() {
+  systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+  if [[ -n "$before_code" && -n "$before_content" ]]; then
+    znt_switch_link "$before_code" "$CURRENT" || true
+    znt_switch_link "$before_content" "$CONTENT_CURRENT" || true
+    znt_start_and_check "$SERVICE" "$before_sha" >/dev/null 2>&1 || true
+  fi
+  service_stopped=0
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if (( status != 0 )); then
+    if (( switched == 1 )); then
+      restore_before_pair
+    elif (( service_stopped == 1 )) && [[ -n "$before_sha" ]]; then
+      znt_start_and_check "$SERVICE" "$before_sha" >/dev/null 2>&1 || true
+    fi
+  fi
+  znt_lock_release
+  exit "$status"
+}
+trap cleanup EXIT
+
+znt_require_root
+[[ $# -eq 0 ]] || znt_fail "usage: znt-rollback"
+[[ -f "$STATE" ]] || znt_fail "deployment state is missing"
+znt_lock_acquire "$ROOT" rollback
+
+pair="$(znt_current_pair "$ROOT")"
+IFS=$'\t' read -r before_sha before_code before_content_version before_content <<< "$pair"
+previous_pair="$(znt_state_previous_pair "$STATE" 2>/dev/null)" \
+  || znt_fail "no complete previous deployment pair is available"
+IFS=$'\t' read -r target_sha target_code target_content_version target_content <<< "$previous_pair"
+znt_validate_pair_paths "$ROOT" "$target_sha" "$target_code" "$target_content_version" "$target_content"
+
+systemctl stop "$SERVICE"
+service_stopped=1
+znt_switch_link "$target_code" "$CURRENT"
+znt_switch_link "$target_content" "$CONTENT_CURRENT"
+switched=1
+if ! znt_start_and_check "$SERVICE" "$target_sha"; then
+  znt_fail "rollback health check failed; current pair was restored"
+fi
+service_stopped=0
+
+znt_write_state "$STATE" "$target_sha" "$target_code" "$target_content_version" "$target_content" \
+  "$before_sha" "$before_code" "$before_content_version" "$before_content"
+# The rollback pair is committed. A final logging failure must not leave the
+# state file describing the target while the links are restored to the source.
+switched=0
+znt_lock_release
+echo "rolled back code=$target_sha content=$target_content_version"

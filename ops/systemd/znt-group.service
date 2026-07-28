@@ -1,0 +1,30 @@
+[Unit]
+Description=ZNT Group Next.js application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zntapp
+Group=zntapp
+WorkingDirectory=/var/www/znt.group/current
+EnvironmentFile=/var/www/znt.group/shared/runtime/app.env
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PORT=3017
+Environment=HOSTNAME=127.0.0.1
+Environment=ZNT_CONTENT_DIR=/var/www/znt.group/shared/content/current
+Environment=TOKEN_RANK_STORE_PATH=/var/www/znt.group/shared/state/token-rank/token-rank-store.json
+ExecStart=/usr/local/bin/znt-app-start
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/www/znt.group/releases /var/www/znt.group/shared/content /var/www/znt.group/shared/runtime
+ReadWritePaths=/var/www/znt.group/shared/state/token-rank
+
+[Install]
+WantedBy=multi-user.target

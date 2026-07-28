@@ -1,0 +1,208 @@
+#!/bin/bash
+set -euo pipefail
+
+LIB_DIR="${ZNT_LIB_DIR:-/usr/local/lib/znt}"
+# shellcheck source=/usr/local/lib/znt/deploy-common.sh
+source "$LIB_DIR/deploy-common.sh"
+
+SHA="${1:-}"
+ROOT="${ZNT_ROOT:-/var/www/znt.group}"
+BUILD_ROOT="$ROOT/builds"
+BUILD_ISOLATION="$BUILD_ROOT/.isolation"
+RELEASES="$ROOT/releases"
+CURRENT="$ROOT/current"
+CONTENT_CURRENT="$ROOT/shared/content/current"
+STATE="$ROOT/shared/deploy-state.json"
+SERVICE="${ZNT_SERVICE:-znt-group.service}"
+KEEP="${ZNT_CODE_KEEP:-3}"
+VALIDATOR="$LIB_DIR/validate-content-bundle.mjs"
+NPM_BIN="$ZNT_NPM_BIN"
+NODE_BIN="$ZNT_NODE_BIN"
+
+candidate=""
+build_candidate=""
+fetch_workspace=""
+new_release=""
+switched=0
+service_stopped=0
+previous_sha=""
+previous_code=""
+previous_content_version=""
+previous_content=""
+
+assert_root_owned_file() {
+  local path="$1"
+  local owner mode
+  [[ -f "$path" && ! -L "$path" ]] || znt_fail "required root-owned file is missing: $path"
+  owner="$(stat -c '%U:%G' "$path")"
+  mode="$(stat -c '%a' "$path")"
+  [[ "$owner" = "root:root" ]] || znt_fail "required file is not root-owned: $path"
+  (( (8#$mode & 0022) == 0 )) || znt_fail "required file is writable by group or others: $path"
+}
+
+assert_source_tree() {
+  local forbidden
+  for forbidden in \
+    data public/digest-images .agents .claude .codex .memory .logs .work .znt-build-home AGENTS.md .git .npmrc \
+    node_modules .next .vercel; do
+    [[ ! -e "$candidate/$forbidden" ]] || znt_fail "source checkout contains forbidden path: $forbidden"
+  done
+
+  while IFS= read -r environment_file; do
+    [[ "$environment_file" = "$candidate/.env.example" && -f "$environment_file" && ! -L "$environment_file" ]] \
+      || znt_fail "source checkout contains forbidden environment file: ${environment_file#$candidate/}"
+  done < <(find -P "$candidate" -xdev -name '.env*' -print)
+
+  if find -P "$candidate" -xdev -type l -print -quit | grep -q .; then
+    znt_fail "source checkout contains symbolic links"
+  fi
+  if find -P "$candidate" -xdev -type f \( -name '*.pem' -o -name '*.key' -o -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' -o -name '*.ods' -o -name '*.log' \) -print -quit | grep -q .; then
+    znt_fail "source checkout contains a secret or database file"
+  fi
+  [[ -f "$candidate/package.json" && -f "$candidate/package-lock.json" ]] \
+    || znt_fail "source checkout is missing package metadata"
+  znt_assert_source_tree_budget "$candidate"
+}
+
+restore_previous_pair() {
+  systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+  if [[ -n "$previous_code" && -n "$previous_content" ]]; then
+    znt_switch_link "$previous_code" "$CURRENT" || true
+    znt_switch_link "$previous_content" "$CONTENT_CURRENT" || true
+    znt_start_and_check "$SERVICE" "$previous_sha" >/dev/null 2>&1 || true
+  fi
+  service_stopped=0
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if (( status != 0 )); then
+    if (( switched == 1 )); then
+      restore_previous_pair
+    elif (( service_stopped == 1 )) && [[ -n "$previous_sha" ]]; then
+      znt_start_and_check "$SERVICE" "$previous_sha" >/dev/null 2>&1 || true
+    fi
+  fi
+  znt_lock_release
+  [[ -z "$candidate" || ! -e "$candidate" ]] || rm -rf -- "$candidate"
+  [[ -z "$build_candidate" || ! -e "$build_candidate" ]] || rm -rf -- "$build_candidate"
+  [[ -z "$fetch_workspace" || ! -e "$fetch_workspace" ]] || rm -rf -- "$fetch_workspace"
+  if (( status != 0 )) && [[ -n "$new_release" && -d "$new_release" ]]; then
+    if [[ "$(znt_realpath "$CURRENT" 2>/dev/null || true)" != "$(znt_realpath "$new_release")" ]]; then
+      rm -rf -- "$new_release"
+    fi
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+
+znt_require_root
+znt_require_node_runtime
+[[ $# -eq 1 ]] || znt_fail "usage: znt-code-deploy <40-character-main-sha>"
+[[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || znt_fail "invalid Git SHA"
+[[ "$KEEP" =~ ^[0-9]+$ ]] || znt_fail "invalid code retention count"
+assert_root_owned_file "$VALIDATOR"
+
+install -d -o zntdeploy -g zntdeploy -m 0730 "$BUILD_ROOT"
+install -d -o root -g root -m 0711 "$BUILD_ISOLATION"
+install -d -o root -g zntapp -m 0750 "$RELEASES"
+znt_require_free_kib "$ROOT"
+znt_lock_acquire "$ROOT" code-deploy
+znt_cleanup_stale_build_units
+
+fetch_workspace="$(mktemp -d "$BUILD_ROOT/.fetch-$SHA.XXXXXX")"
+chown zntdeploy:zntdeploy "$fetch_workspace"
+chmod 0700 "$fetch_workspace"
+znt_assert_public_main "$ROOT" "$fetch_workspace" "$SHA"
+rm -rf -- "$fetch_workspace/.znt-build-home"
+pair="$(znt_current_pair "$ROOT")"
+IFS=$'\t' read -r previous_sha previous_code previous_content_version previous_content <<< "$pair"
+release="$RELEASES/$SHA"
+if [[ "$previous_sha" = "$SHA" && "$(znt_realpath "$previous_code")" = "$(znt_realpath "$release")" ]]; then
+  znt_lock_release
+  rm -rf -- "$fetch_workspace"
+  fetch_workspace=""
+  echo "code sha=$SHA is already active with content=$previous_content_version"
+  exit 0
+fi
+"$NODE_BIN" "$VALIDATOR" "$previous_content"
+
+znt_clone_verified_public_main "$ROOT" "$fetch_workspace" "$SHA"
+build_candidate="$fetch_workspace/source"
+isolated_candidate="$(mktemp -d "$BUILD_ISOLATION/.candidate-$SHA.XXXXXX")"
+rmdir "$isolated_candidate"
+mv -- "$build_candidate" "$isolated_candidate"
+build_candidate="$isolated_candidate"
+rm -rf -- "$fetch_workspace"
+fetch_workspace=""
+[[ -d "$build_candidate" && ! -L "$build_candidate" ]] || znt_fail "isolated source candidate is invalid"
+if find -P "$build_candidate" -xdev -type l -print -quit | grep -q .; then
+  znt_fail "source checkout contains symbolic links"
+fi
+if find -P "$build_candidate" -xdev ! -type d ! -type f -print -quit | grep -q .; then
+  znt_fail "source checkout contains an unsupported filesystem entry"
+fi
+candidate="$build_candidate"
+assert_source_tree
+
+znt_run_isolated_build "$ROOT" "$build_candidate" download \
+  "$NPM_BIN" ci --ignore-scripts --no-audit --no-fund
+znt_run_isolated_build "$ROOT" "$build_candidate" offline \
+  "$NPM_BIN" rebuild --offline --no-audit --no-fund
+znt_run_isolated_build "$ROOT" "$build_candidate" offline \
+  /usr/bin/env \
+    ACCESS_PASSWORD=znt-build-only \
+    ACCESS_SESSION_SECRET=znt-build-only-session-secret-with-at-least-32-characters \
+    TOKEN_RANK_STORE_PATH="$build_candidate/.znt-build-token-rank.json" \
+    BUILD_SHA="$SHA" \
+    "$NPM_BIN" run build
+rm -rf -- "$build_candidate/.znt-build-home"
+znt_require_free_kib "$ROOT"
+
+# Copy after the unprivileged build so stale writable file descriptors cannot
+# mutate the immutable release candidate used by the app.
+candidate="$(mktemp -d "$RELEASES/.candidate-$SHA.XXXXXX")"
+rsync -a --no-specials --no-devices "$build_candidate/" "$candidate/"
+rm -f -- "$candidate/.znt-build-token-rank.json"
+chown -hR root:zntapp "$candidate"
+znt_assert_internal_symlinks "$candidate"
+if find -P "$candidate" -xdev ! -type d ! -type f ! -type l -print -quit | grep -q .; then
+  znt_fail "candidate build created an unsupported filesystem entry"
+fi
+find -P "$candidate" -type d -exec chmod 0750 {} +
+find -P "$candidate" -type f -perm /u+x -exec chmod 0750 {} +
+find -P "$candidate" -type f ! -perm /u+x -exec chmod 0640 {} +
+
+# The build can be long. Refuse to activate it if main advanced while the
+# candidate was being prepared.
+znt_assert_public_main "$ROOT" "$build_candidate" "$SHA"
+rm -rf -- "$build_candidate"
+build_candidate=""
+[[ ! -e "$release" ]] || znt_fail "code release already exists"
+mkdir -p "$RELEASES"
+mv "$candidate" "$release"
+candidate=""
+new_release="$release"
+
+systemctl stop "$SERVICE"
+service_stopped=1
+znt_switch_link "$release" "$CURRENT"
+switched=1
+if ! znt_start_and_check "$SERVICE" "$SHA"; then
+  znt_fail "candidate health check failed; previous pair was restored"
+fi
+service_stopped=0
+
+znt_write_state "$STATE" "$SHA" "$release" "$previous_content_version" "$previous_content" \
+  "$previous_sha" "$previous_code" "$previous_content_version" "$previous_content"
+# The links and state file now describe the same committed pair. A later
+# broken stdout pipe must not make the EXIT trap roll back only the links.
+switched=0
+new_release=""
+
+if ! znt_prune_releases "$RELEASES" "$CURRENT" "$previous_code" "$KEEP" "$RELEASES/.protected"; then
+  echo "znt-code-deploy: warning: code release retention cleanup failed" >&2
+fi
+znt_lock_release
+echo "deployed code sha=$SHA content=$previous_content_version"
