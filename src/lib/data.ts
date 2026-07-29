@@ -781,7 +781,7 @@ function buildReproductions(item: SearchIndexItem, status: TrustStatus): Reprodu
       tester: "旺总AI",
       level: "AI 初审",
       status: "pending",
-      environment: "日报 JSON / 群精华索引",
+      environment: "期刊 JSON / 群精华索引",
       summary: "已完成结构化抽取，等待人工或专家在真实环境中复现。",
     },
   ];
@@ -941,7 +941,7 @@ function knowledgeIndexToTrustedItem(
     firstSource.date || detail.source_date || detail.updated_at || detail.created_at || raw.updated_at || "",
   );
   const sourceHref = String(firstSource.daily_ref || (sourceDate ? `/daily/${sourceDate}` : "/daily"));
-  const sourceTitle = sourceDate ? `知识日报 ${sourceDate}` : "群精华证据";
+  const sourceTitle = sourceDate ? `期刊 ${sourceDate}` : "群精华证据";
   const rating = String(detail.rating || raw.rating || "");
   const sourceCount = sources.length || Number(raw.source_count || 0) || 1;
   const contributors = uniqueStrings([

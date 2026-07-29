@@ -89,7 +89,7 @@ test("homepage leads with a value proposition and only four core blocks", async 
   );
 
   // Social proof stays on the first screen as a data band (#16).
-  for (const label of ["期内容", "条消息", "高价值观点", "贡献者"]) {
+  for (const label of ["条消息", "高价值观点", "贡献者", "话题索引"]) {
     assert.ok(home.includes(label), `data band must keep the ${label} stat`);
   }
 

@@ -39,6 +39,19 @@ export default function RootLayout({
         <JoinCommunity />
         <footer className="border-t border-white/[0.06] bg-background-card/40 pb-24 pt-8 md:pb-10">
           <div className="mx-auto max-w-[1400px] space-y-4 px-4 md:px-8">
+            <nav aria-label="更多站点" className="flex flex-wrap gap-x-6 gap-y-2 text-sm font-semibold">
+              <a
+                href="https://bbs.znt.group/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-foreground-muted hover:text-accent"
+              >
+                先锋智能体论坛 ↗
+              </a>
+              <a href="/token-rank" className="text-foreground-muted hover:text-accent">
+                Token榜
+              </a>
+            </nav>
             <p className="text-sm leading-6 text-foreground-muted">
               本站内容由 AI 自动整理自「智能体先锋队」社群讨论，由旺总维护。内容仅供参考，不保证准确性、完整性及时效性，不构成任何专业建议。原始发言版权归发言者所有，如需更正或有其他问题，请通过「加入智能体先锋队社群」区块的微信联系。
             </p>

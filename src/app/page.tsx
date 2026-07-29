@@ -184,7 +184,7 @@ export default async function Home() {
 
           <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
             {[
-              { value: `${stats.issueCount}`, label: "期内容" },
+              { value: `${stats.issueCount}`, label: "期" },
               { value: `${stats.topicCount}`, label: "话题索引" },
               { value: compactNumber(stats.messageCount), label: "条消息" },
               { value: `${stats.insightCount}`, label: "高价值观点" },
