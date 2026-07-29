@@ -593,6 +593,36 @@ export function getSearchIndex(): SearchIndexItem[] {
   return JSON.parse(content) as SearchIndexItem[];
 }
 
+// Content bundles generated before the empty-section guard may still carry
+// headings with nothing under them; drop those so pages never render a
+// bare section title.
+export function stripEmptySections(content: string): string {
+  const lines = content.split("\n");
+  const result: string[] = [];
+  let pendingHeading: string | null = null;
+  let pendingBlanks: string[] = [];
+
+  for (const line of lines) {
+    if (/^###\s+/.test(line)) {
+      pendingHeading = line;
+      pendingBlanks = [];
+      continue;
+    }
+    if (pendingHeading !== null) {
+      if (line.trim() === "") {
+        pendingBlanks.push(line);
+        continue;
+      }
+      result.push(pendingHeading, ...pendingBlanks);
+      pendingHeading = null;
+      pendingBlanks = [];
+    }
+    result.push(line);
+  }
+
+  return result.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function getDailyReport(date: string): DailyReport {
   const filePath = contentDataPath(`daily/${date}.json`);
   const content = fs.readFileSync(filePath, "utf8");
@@ -603,6 +633,7 @@ export function getDailyReport(date: string): DailyReport {
     topic.action_items ??= [];
     topic.contributors ??= [];
     topic.tags ??= [];
+    topic.content = stripEmptySections(String(topic.content ?? ""));
   }
   return raw as DailyReport;
 }

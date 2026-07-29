@@ -283,12 +283,19 @@ def action_items_for_topic(topic_tags, group_actions):
 
 
 def build_content(description, items):
-    lines = [description, "", "### 关键沉淀"]
+    lines = [description]
+
+    item_lines = []
     for item in items[:7]:
         title = normalize_text(item.get("title"))
         summary = normalize_text(item.get("summary"))
         if title and summary:
-            lines.append(f"- **{title}**：{summary}")
+            item_lines.append(f"- **{title}**：{summary}")
+    # A heading with nothing under it reads as a broken page; sections
+    # only exist when they have content.
+    if item_lines:
+        lines.extend(["", "### 关键沉淀"])
+        lines.extend(item_lines)
 
     quotes = collect_quotes(items)
     if quotes:
