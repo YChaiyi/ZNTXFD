@@ -77,7 +77,7 @@ function writeContent(root) {
 
   const topic = {
     title: "AI 编程与项目交付",
-    content: "分类描述：验证空小节处理。\n\n### 关键沉淀\n\n### 证据原话\n- 成员甲：这是一条真实证据。",
+    content: "分类描述：验证空小节处理。\n\n### 关键沉淀\n\n### 证据原话\n- 成员甲：这是一条真实证据。\n紧贴段落\n### 补充说明\n- 单换行前后的标题也要独立成块。",
     key_insights: ["空小节不应出现在页面上"],
     tools_mentioned: [],
     action_items: [],
@@ -182,6 +182,10 @@ test("legacy empty sections are hidden and zero token rows leave the board", asy
   assert.ok(
     daily.includes("这是一条真实证据"),
     "the section body must render instead of being swallowed with the heading",
+  );
+  assert.ok(
+    daily.includes(">补充说明<"),
+    "a heading preceded by a single newline must still become a real heading",
   );
 
   const board = await (await fetch(`${baseUrl}/token-rank`)).text();
