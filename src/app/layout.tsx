@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { BottomNav } from "@/components/BottomNav";
@@ -48,9 +49,9 @@ export default function RootLayout({
               >
                 先锋智能体论坛 ↗
               </a>
-              <a href="/token-rank" className="text-foreground-muted hover:text-accent">
+              <Link href="/token-rank" className="text-foreground-muted hover:text-accent">
                 Token榜
-              </a>
+              </Link>
             </nav>
             <p className="text-sm leading-6 text-foreground-muted">
               本站内容由 AI 自动整理自「智能体先锋队」社群讨论，由旺总维护。内容仅供参考，不保证准确性、完整性及时效性，不构成任何专业建议。原始发言版权归发言者所有，如需更正或有其他问题，请通过「加入智能体先锋队社群」区块的微信联系。
