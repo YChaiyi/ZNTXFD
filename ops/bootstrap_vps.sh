@@ -292,7 +292,7 @@ validate_store() {
 }
 
 nginx_preflight() {
-  local rendered health_block login_block upload_block
+  local rendered health_block login_block register_block upload_block
   rendered="$(mktemp /tmp/znt-nginx.XXXXXX)"
   if ! nginx -T > "$rendered" 2>&1; then
     rm -f -- "$rendered"
@@ -310,7 +310,17 @@ nginx_preflight() {
     }
   ' "$rendered")"
   login_block="$(awk '
-    /location = \/api\/auth\/verify[[:space:]]*\{/ { inside=1 }
+    /location = \/api\/token-rank\/login[[:space:]]*\{/ { inside=1 }
+    inside {
+      print
+      opens = gsub(/\{/, "&")
+      closes = gsub(/\}/, "&")
+      depth += opens - closes
+      if (depth == 0) exit
+    }
+  ' "$rendered")"
+  register_block="$(awk '
+    /location = \/api\/token-rank\/register[[:space:]]*\{/ { inside=1 }
     inside {
       print
       opens = gsub(/\{/, "&")
@@ -330,19 +340,23 @@ nginx_preflight() {
     }
   ' "$rendered")"
 
-  if ! grep -Fq 'limit_req_zone $binary_remote_addr zone=znt_login:' "$rendered" || \
+  if ! grep -Fq 'limit_req_zone $binary_remote_addr zone=znt_identity:' "$rendered" || \
     ! grep -Fq 'limit_req_zone $binary_remote_addr zone=znt_upload:' "$rendered"; then
     rm -f -- "$rendered"
-    znt_fail "Nginx login/upload rate-limit zones are missing"
+    znt_fail "Nginx Token Rank identity/upload rate-limit zones are missing"
   fi
   if [[ "$health_block" != *'allow 127.0.0.1;'* || "$health_block" != *'allow ::1;'* || \
     "$health_block" != *'deny all;'* || "$health_block" != *'proxy_set_header X-ZNT-Local-Health 1;'* ]]; then
     rm -f -- "$rendered"
     znt_fail "Nginx /api/health must be an exact localhost-only location with the trusted health header"
   fi
-  if [[ "$login_block" != *'limit_req zone=znt_login'* || "$login_block" != *'client_max_body_size 4k;'* ]]; then
+  if [[ "$login_block" != *'limit_req zone=znt_identity'* || "$login_block" != *'client_max_body_size 4k;'* ]]; then
     rm -f -- "$rendered"
-    znt_fail "Nginx login request limit is missing"
+    znt_fail "Nginx Token Rank login request limit is missing"
+  fi
+  if [[ "$register_block" != *'limit_req zone=znt_identity'* || "$register_block" != *'client_max_body_size 4k;'* ]]; then
+    rm -f -- "$rendered"
+    znt_fail "Nginx Token Rank register request limit is missing"
   fi
   if [[ "$upload_block" != *'limit_req zone=znt_upload'* || "$upload_block" != *'client_max_body_size 2m;'* ]]; then
     rm -f -- "$rendered"
@@ -464,30 +478,6 @@ copy_legacy_content() {
   MIGRATION_CONTENT_RELEASE="$release"
 }
 
-validate_runtime_config() {
-  "$NODE_BIN" - "$RUNTIME_DIR/app.env" <<'NODE'
-const fs = require("fs");
-const file = process.argv[2];
-const values = new Map();
-for (const rawLine of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
-  const line = rawLine.trim();
-  if (!line || line.startsWith("#")) continue;
-  const index = line.indexOf("=");
-  if (index <= 0) continue;
-  const name = line.slice(0, index).trim();
-  let value = line.slice(index + 1).trim();
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    value = value.slice(1, -1);
-  }
-  values.set(name, value);
-}
-if (!values.get("ACCESS_PASSWORD")) throw new Error("ACCESS_PASSWORD is missing from app.env");
-if ((values.get("ACCESS_SESSION_SECRET") || "").length < 32) {
-  throw new Error("ACCESS_SESSION_SECRET must contain at least 32 characters");
-}
-NODE
-}
-
 assert_initial_source_tree() {
   local candidate="$1"
   local forbidden environment_file
@@ -553,8 +543,6 @@ build_initial_code() {
     "$NPM_BIN" rebuild --offline --no-audit --no-fund
   znt_run_isolated_build "$ROOT" "$build_candidate" offline \
     /usr/bin/env \
-      ACCESS_PASSWORD=znt-build-only \
-      ACCESS_SESSION_SECRET=znt-build-only-session-secret-with-at-least-32-characters \
       TOKEN_RANK_STORE_PATH="$build_candidate/.znt-build-token-rank.json" \
       BUILD_SHA="$code_sha" \
       "$NPM_BIN" run build
@@ -620,7 +608,6 @@ migrate() {
 
   prepare
   nginx_preflight
-  validate_runtime_config
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   snapshot="$SNAPSHOT_ROOT/$timestamp"
   code_sha="$SOURCE_SHA"

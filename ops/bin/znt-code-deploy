@@ -152,8 +152,6 @@ znt_run_isolated_build "$ROOT" "$build_candidate" offline \
   "$NPM_BIN" rebuild --offline --no-audit --no-fund
 znt_run_isolated_build "$ROOT" "$build_candidate" offline \
   /usr/bin/env \
-    ACCESS_PASSWORD=znt-build-only \
-    ACCESS_SESSION_SECRET=znt-build-only-session-secret-with-at-least-32-characters \
     TOKEN_RANK_STORE_PATH="$build_candidate/.znt-build-token-rank.json" \
     BUILD_SHA="$SHA" \
     "$NPM_BIN" run build

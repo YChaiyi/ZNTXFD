@@ -8,7 +8,7 @@
 - `data/**`、`public/digest-images/**`、ODS、原始消息、环境文件、日志和密钥不进入 GitHub。
 - VPS 是唯一生产入口；生产内容、Token Rank 状态、GoatCounter 数据和日志都保存在 `shared/`。
 - 代码只在 `main` 合并后由 GitHub Actions 发布；日报负责人本机只发布内容包，不上传源码。
-- 网站内容使用固定密码访问；GoatCounter `/stats/` 保持公开。
+- 网站内容匿名访问；Token Rank 上传仍需专属令牌，GoatCounter `/stats/` 保持公开。
 
 代码与内容在 VPS 上独立保存并成对记录：
 
@@ -43,7 +43,7 @@ npm run site:verify -- YYYY-MM-DD
 - 日期按北京时间；省略日期时使用北京时间前一天。
 - `site:update` 在本机生成并质检日报、知识、索引和图片。
 - `site:deploy` 先执行同一生成流程，再只上传内容包；本机 Git 状态异常只告警。
-- `site:verify` 自动登录并核对线上日期、标题和内容版本。
+- `site:verify` 直接核对线上日期、标题和内容版本，并兼容迁移前的密码版本回滚。
 
 内容包只包含：
 
@@ -84,8 +84,6 @@ npm run build
 
 | 变量 | 用途 |
 |---|---|
-| `ACCESS_PASSWORD` | 网站固定访问密码 |
-| `ACCESS_SESSION_SECRET` | 签名 7 天访问 Cookie 的独立随机密钥 |
 | `ZNT_CONTENT_DIR` | 活动内容目录，生产为 `shared/content/current` |
 | `TOKEN_RANK_STORE_PATH` | Token Rank 持久化文件，生产必须位于 `shared/` |
 | `BUILD_SHA` | 当前代码版本，由部署流程设置 |
@@ -96,7 +94,6 @@ npm run build
 |---|---|
 | `GROUP_DIGEST_RUNTIME` | 群精华运行目录；未设置时使用当前用户主目录下的 `.group-digest-runtime` |
 | `ZNT_SITE_DIR` | 日报工作站上的正式项目目录，仅供本机操作说明使用 |
-| `ZNT_SITE_PASSWORD` | `site:verify` 登录密码；未设置时读取 `ACCESS_PASSWORD` |
 | `ZNT_SITE_URL` | 验证站点；默认 `https://znt.group` |
 | `ZNT_VPS_SSH_KEY` | 内容上传使用的 SSH 私钥路径 |
 | `ZNT_VPS_KNOWN_HOSTS` | 包含已核验 VPS 主机公钥的 known_hosts 文件 |
@@ -104,7 +101,7 @@ npm run build
 | `ZNT_CONTENT_KEEP` | VPS 保留的内容版本数；默认 `30` |
 | `ZNT_MAIN_REF` | 本机源码同步检查基准；默认 `origin/main` |
 
-参考值见 [`.env.example`](.env.example)。真实密码、密钥和服务器环境文件不得复制进仓库。
+参考值见 [`.env.example`](.env.example)。真实环境值、密钥和服务器环境文件不得复制进仓库。
 
 GitHub `production` Environment 另需配置 `ZNT_DEPLOY_SSH_KEY`、`ZNT_DEPLOY_KNOWN_HOSTS`、`ZNT_DEPLOY_HOST` 和 `ZNT_DEPLOY_USER` 四个 Secrets。VPS 迁移和受限账户验收完成后，再将仓库变量 `ZNT_DEPLOY_ENABLED` 设为 `true`；这些值只用于发布精确代码 SHA，不应写入 `.env`。
 

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getContentStatus } from "@/lib/data";
-import { isAccessConfigured } from "@/lib/accessAuth";
 import { isTokenRankStoreConfigured } from "@/lib/tokenRankStore";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +13,7 @@ export async function GET(request: NextRequest) {
   if (!isLocal(request)) return new NextResponse(null, { status: 404 });
   const content = getContentStatus();
   const tokenRankStoreReady = isTokenRankStoreConfigured();
-  const ready = content.ready && isAccessConfigured() && tokenRankStoreReady;
+  const ready = content.ready && tokenRankStoreReady;
   return NextResponse.json(
     {
       ready,

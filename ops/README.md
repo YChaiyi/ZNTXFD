@@ -79,12 +79,9 @@ sudo bash ops/bootstrap_vps.sh prepare
 sudoedit /var/www/znt.group/shared/runtime/app.env
 ```
 
-Set at least:
-
-```dotenv
-ACCESS_PASSWORD=...
-ACCESS_SESSION_SECRET=at-least-32-random-characters
-```
+The runtime environment file may remain empty unless a deployment needs an
+explicit app override. Content and Token Rank paths are fixed by the systemd
+unit and are not stored in Git.
 
 The bootstrap creates a valid empty Token Rank store only when no store is
 present. It validates that store before the app can start.
@@ -112,9 +109,10 @@ sudo /usr/sbin/sshd -t
 sudo systemctl reload ssh.service
 ```
 
-Install the Nginx limits from `ops/nginx/znt.group.conf` into the existing
-server configuration. Preserve the existing `/stats/` GoatCounter location
-and TLS directives. The health endpoint remains localhost-only.
+Install the Token Rank registration/upload limits from
+`ops/nginx/znt.group.conf` into the existing server configuration. Preserve
+the existing `/stats/` GoatCounter location and TLS directives. The health
+endpoint remains localhost-only.
 
 ## First migration
 
