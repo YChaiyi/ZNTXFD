@@ -89,7 +89,7 @@ function IssueSwitcher({
   const baseLink =
     "glass-card card-hover flex min-h-[72px] flex-col justify-center p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.16] hover:text-accent";
   const disabled =
-    "glass-card flex min-h-[72px] flex-col justify-center p-4 text-foreground-disabled";
+    "glass-card flex min-h-[72px] cursor-not-allowed select-none flex-col justify-center p-4 text-foreground-disabled opacity-60";
 
   return (
     <nav
@@ -111,20 +111,21 @@ function IssueSwitcher({
           </span>
         </Link>
       ) : (
-        <span className={`${disabled} text-left text-sm md:text-base`}>
-          ← 上一期
+        <span aria-disabled="true" className={`${disabled} text-left text-sm md:text-base`}>
+          <span>← 上一期</span>
+          <span className="mt-1 text-xs md:text-sm">已是最早一期</span>
         </span>
       )}
 
-      <Link
-        href="/daily"
-        className="glass-card card-hover flex min-h-[72px] w-24 flex-col items-center justify-center p-3 text-center text-sm font-semibold text-foreground hover:border-white/[0.16] hover:text-accent md:w-36 md:text-base"
+      <span
+        aria-current="page"
+        className="glass-card flex min-h-[72px] w-24 flex-col items-center justify-center p-3 text-center text-sm font-semibold text-foreground md:w-36 md:text-base"
       >
         <span>本期</span>
         <span className="mono-num mt-1 text-xs text-foreground-muted md:text-sm">
           {formatDate(currentDate)}
         </span>
-      </Link>
+      </span>
 
       {nextDate ? (
         <Link
@@ -137,8 +138,9 @@ function IssueSwitcher({
           </span>
         </Link>
       ) : (
-        <span className={`${disabled} text-right text-sm md:text-base`}>
-          下一期 →
+        <span aria-disabled="true" className={`${disabled} text-right text-sm md:text-base`}>
+          <span>下一期 →</span>
+          <span className="mt-1 text-xs md:text-sm">已是最新一期</span>
         </span>
       )}
     </nav>
