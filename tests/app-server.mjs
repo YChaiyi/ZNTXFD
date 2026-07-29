@@ -1,9 +1,14 @@
 import { execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
 const projectRoot = process.cwd();
 const nextBin = path.join(projectRoot, "node_modules", "next", "dist", "bin", "next");
+// The lock name matches the repository's `.next-stale-*` gitignore pattern.
+const buildLockDir = path.join(projectRoot, ".next-stale-e2e-lock");
+const buildStampPath = path.join(projectRoot, ".next", "znt-e2e-build-stamp.json");
+const LOCK_STALE_MS = 5 * 60_000;
 
 let built = false;
 
@@ -14,15 +19,86 @@ function cleanEnv(extra = {}) {
   return env;
 }
 
+function sourceFingerprint() {
+  const roots = [
+    "src",
+    "public",
+    "next.config.ts",
+    "tailwind.config.ts",
+    "postcss.config.mjs",
+    "package.json",
+  ];
+  let newest = 0;
+  const visit = (target) => {
+    const stat = fs.statSync(target);
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(target)) visit(path.join(target, entry));
+    } else if (stat.mtimeMs > newest) {
+      newest = stat.mtimeMs;
+    }
+  };
+  for (const root of roots) {
+    const absolute = path.join(projectRoot, root);
+    if (fs.existsSync(absolute)) visit(absolute);
+  }
+  return String(newest);
+}
+
+function hasFreshBuild(fingerprint) {
+  try {
+    const stamp = JSON.parse(fs.readFileSync(buildStampPath, "utf8"));
+    return stamp.fingerprint === fingerprint;
+  } catch {
+    return false;
+  }
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Test files run in separate processes that may all need the app. Exactly one
+// process builds; the others wait on the lock and then reuse the stamped build.
 export function buildApp() {
   if (built) return;
-  execFileSync(process.execPath, [nextBin, "build"], {
-    cwd: projectRoot,
-    env: cleanEnv(),
-    stdio: "pipe",
-    encoding: "utf8",
-  });
-  built = true;
+  const fingerprint = sourceFingerprint();
+  const deadline = Date.now() + 10 * 60_000;
+  for (;;) {
+    if (hasFreshBuild(fingerprint)) {
+      built = true;
+      return;
+    }
+    try {
+      fs.mkdirSync(buildLockDir);
+      break;
+    } catch {
+      try {
+        if (Date.now() - fs.statSync(buildLockDir).mtimeMs > LOCK_STALE_MS) {
+          fs.rmSync(buildLockDir, { recursive: true, force: true });
+        }
+      } catch {
+        // Lock vanished between the failed mkdir and the stat; retry.
+      }
+      if (Date.now() > deadline) {
+        throw new Error("timed out waiting for a concurrent next build");
+      }
+      sleepSync(1000);
+    }
+  }
+  try {
+    if (!hasFreshBuild(fingerprint)) {
+      execFileSync(process.execPath, [nextBin, "build"], {
+        cwd: projectRoot,
+        env: cleanEnv(),
+        stdio: "pipe",
+        encoding: "utf8",
+      });
+      fs.writeFileSync(buildStampPath, JSON.stringify({ fingerprint }));
+    }
+    built = true;
+  } finally {
+    fs.rmSync(buildLockDir, { recursive: true, force: true });
+  }
 }
 
 function freePort() {
