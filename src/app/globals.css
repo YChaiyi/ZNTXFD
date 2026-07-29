@@ -51,6 +51,14 @@ a {
   background: #3a3a42;
 }
 
+@layer base {
+  /* WCAG 2.4.7: a consistent, visible keyboard focus indicator everywhere. */
+  :focus-visible {
+    outline: 2px solid #ffa53d;
+    outline-offset: 2px;
+  }
+}
+
 @layer components {
   .glass {
     border: 0.5px solid rgba(255, 255, 255, 0.08);

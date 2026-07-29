@@ -13,7 +13,7 @@ export function ContributorList({ contributors }: ContributorListProps) {
         <span key={contributor} className="inline-flex items-center gap-1.5">
           <span
             aria-hidden="true"
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-background-hover text-[10px] font-semibold text-accent"
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-background-hover text-xs font-semibold text-accent"
           >
             {contributor.slice(0, 1)}
           </span>

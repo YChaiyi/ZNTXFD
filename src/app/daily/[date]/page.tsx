@@ -177,7 +177,7 @@ export default async function DailyPage({ params }: DailyPageProps) {
       label: "群精华",
       value: digestValue,
       type: "groups" as const,
-      tone: images.length > 0 ? "text-accent" : "text-foreground-disabled",
+      tone: images.length > 0 ? "text-accent" : "text-foreground-muted",
     },
     {
       label: "消息数",

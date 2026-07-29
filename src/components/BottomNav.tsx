@@ -148,7 +148,7 @@ export function BottomNav() {
       <nav className="fixed bottom-0 left-0 right-0 z-50 grid h-[72px] grid-cols-5 border-t border-white/[0.07] bg-background/90 px-1 backdrop-blur-[20px] md:hidden">
         {tabs.map((tab) => {
           const active = isActivePath(pathname, tab.href);
-          const className = `flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold transition-colors ${
+          const className = `flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-xs font-semibold transition-colors ${
             active
               ? "bg-accent/15 text-accent"
               : "text-foreground-muted hover:text-foreground"
@@ -172,7 +172,7 @@ export function BottomNav() {
           aria-expanded={moreOpen}
           aria-controls="bottom-more-panel"
           onClick={() => setMoreOpen((open) => !open)}
-          className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold transition-colors ${
+          className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-xs font-semibold transition-colors ${
             moreOpen ? "bg-accent/15 text-accent" : "text-foreground-muted hover:text-foreground"
           }`}
         >
