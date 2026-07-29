@@ -44,7 +44,7 @@ export default function DailyListPage() {
           {cards.map((card) => {
             const status = getDigestStatus(card.date);
             const digestLabel = status.available
-              ? `${status.readyCount}/${status.totalCount}`
+              ? `${status.readyCount}/${status.totalCount} 群已归档`
               : "未纳入";
             return (
               <Link

@@ -161,7 +161,7 @@ export default async function DailyPage({ params }: DailyPageProps) {
   const digestValue =
     images.length > 0 ? `${readyImages.length}/${images.length}` : "未纳入";
   const digestReadyLabel =
-    images.length > 0 ? `${readyImages.length}/${images.length} 已就绪` : "未纳入";
+    images.length > 0 ? `${readyImages.length}/${images.length} 群已归档` : "未纳入";
   const reportNeedsRefine = isRawishReport(report);
   const dateIndex = allDates.indexOf(date);
   const previousDate = dateIndex > 0 ? allDates[dateIndex - 1] : null;

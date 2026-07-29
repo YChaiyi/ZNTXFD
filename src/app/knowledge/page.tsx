@@ -1,4 +1,5 @@
 import { KnowledgeDirectoryClient } from "@/components/KnowledgeDirectoryClient";
+import { formatCount } from "@/lib/format";
 import { getTrustedKnowledgeItems } from "@/lib/data";
 
 export const dynamic = "force-dynamic";
@@ -78,11 +79,6 @@ const hubs: HubConfig[] = [
     matchTerms: [],
   },
 ];
-
-function compactNumber(value: number) {
-  if (value >= 10000) return `${(value / 10000).toFixed(1)}万`;
-  return value.toLocaleString("zh-CN");
-}
 
 function countBy<T>(items: T[], getKey: (item: T) => string) {
   const counts = new Map<string, number>();
@@ -164,10 +160,10 @@ export default function KnowledgePage() {
   });
 
   const stats = [
-    { label: "AAA 条目", value: compactNumber(items.length), tone: "text-accent" },
-    { label: "覆盖日期", value: compactNumber(dates.size), tone: "text-success" },
-    { label: "专题入口", value: compactNumber(directoryHubs.filter((hub) => hub.count > 0).length), tone: "text-purple" },
-    { label: "来源证据", value: compactNumber(sourceCount), tone: "text-pink" },
+    { label: "AAA 条目", value: formatCount(items.length), tone: "text-accent" },
+    { label: "覆盖日期", value: formatCount(dates.size), tone: "text-success" },
+    { label: "专题入口", value: formatCount(directoryHubs.filter((hub) => hub.count > 0).length), tone: "text-purple" },
+    { label: "来源证据", value: formatCount(sourceCount), tone: "text-pink" },
   ];
 
   return (

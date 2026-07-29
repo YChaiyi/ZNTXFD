@@ -449,7 +449,6 @@ export type QuestionItem = {
   status: "ai_answered" | "expert_needed" | "answered";
   answer: string;
   relatedKnowledge: TrustedKnowledgeItem[];
-  votes: number;
   answers: number;
 };
 
@@ -1128,7 +1127,6 @@ export function getQuestionItems(): QuestionItem[] {
     status: index === 0 ? "answered" : index === 1 ? "ai_answered" : "expert_needed",
     answer: `AI 先引用「${question.seed.title}」作为基础答案：${question.seed.claim}。下一步需要补充更多来源和人工验证，才能升级为稳定结论。`,
     relatedKnowledge: [question.seed, ...items.filter((item) => item.slug !== question.seed.slug).slice(index, index + 2)],
-    votes: 62 - index * 11,
     answers: index === 2 ? 1 : 3 - index,
   }));
 }

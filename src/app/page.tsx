@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { KnowledgeCard } from "@/components/KnowledgeCard";
+import { formatCount } from "@/lib/format";
 import {
   getDailyIndex,
   getDailyReport,
@@ -25,11 +26,6 @@ type AssetStats = {
 function formatDate(date: string) {
   const value = new Date(`${date}T00:00:00`);
   return `${value.getMonth() + 1}月${value.getDate()}日 · ${weekdays[value.getDay()]}`;
-}
-
-function compactNumber(value: number) {
-  if (value >= 10000) return `${(value / 10000).toFixed(1)}万`;
-  return value.toLocaleString("zh-CN");
 }
 
 function buildAssetStats(cards: DailyIndexItem[], reports: DailyReport[]): AssetStats {
@@ -167,7 +163,7 @@ export default async function Home() {
                         className="mono-num font-black text-accent"
                         data-group-count={chip.key}
                       >
-                        {compactNumber(chip.count)}
+                        {formatCount(chip.count)}
                       </span>
                     ) : null}
                   </Link>
@@ -186,7 +182,7 @@ export default async function Home() {
             {[
               { value: `${stats.issueCount}`, label: "期" },
               { value: `${stats.topicCount}`, label: "话题索引" },
-              { value: compactNumber(stats.messageCount), label: "条消息" },
+              { value: formatCount(stats.messageCount), label: "条消息" },
               { value: `${stats.insightCount}`, label: "高价值观点" },
               { value: `${stats.toolCount}`, label: "工具线索" },
               { value: `${stats.contributorCount}`, label: "贡献者" },
