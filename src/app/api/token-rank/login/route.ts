@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { findTokenRankUser, TOKEN_RANK_COOKIE } from "@/lib/tokenRankStore";
+import { findTokenRankUser, isTokenRankUserActive, TOKEN_RANK_COOKIE } from "@/lib/tokenRankStore";
 
 export const runtime = "nodejs";
 
@@ -12,6 +12,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { status: 401, message: "令牌无效，请检查 znt_trk_ 开头的专属令牌" },
       { status: 401 },
+    );
+  }
+  if (!isTokenRankUserActive(user)) {
+    return NextResponse.json(
+      { status: 410, message: "此专属命令已停用，请生成新的专属命令" },
+      { status: 410 },
     );
   }
 

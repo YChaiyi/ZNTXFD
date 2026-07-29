@@ -664,7 +664,7 @@ function ConnectView({ data }: { data: TokenRankData }) {
 
       <section className="glass-card p-5">
         <h2 className="font-bold text-foreground">① 生成你的专属命令</h2>
-        <p className="mt-1 text-sm text-foreground-muted">只需要昵称；角色标签不填也可以。生成后本浏览器会记住你的令牌。</p>
+        <p className="mt-1 text-sm text-foreground-muted">昵称全站唯一；已被使用时请更换昵称。角色标签不填也可以，生成后本浏览器会记住你的令牌。</p>
         <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
           <label className="block">
             <span className="text-xs font-bold text-foreground-muted">昵称</span>
@@ -672,6 +672,7 @@ function ConnectView({ data }: { data: TokenRankData }) {
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="智能体先锋队群友"
+              maxLength={32}
               className="mt-2 h-11 w-full rounded-[12px] border border-white/[0.08] bg-background/70 px-3 text-sm text-foreground outline-none transition-colors placeholder:text-foreground-disabled focus:border-accent/60"
             />
           </label>

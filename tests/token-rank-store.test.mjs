@@ -304,6 +304,67 @@ test("local concurrent registrations retain every user and generate unique safe 
   assert.ok(users.every((user) => Number.isSafeInteger(user.userId) && user.userId > 0));
 });
 
+test("nickname registration rejects canonical duplicates without creating another identity", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const first = await store.createTokenRankUser({ name: "  Haiyi  " });
+  const before = fs.readFileSync(storePath, "utf8");
+
+  await assert.rejects(
+    store.createTokenRankUser({ name: "ｈａｉｙｉ" }),
+    (error) => error?.code === "nickname_taken" && error?.status === 409,
+  );
+  await assert.rejects(
+    store.createTokenRankUser({ name: "   " }),
+    (error) => error?.code === "invalid_nickname" && error?.status === 400,
+  );
+  assert.equal(fs.readFileSync(storePath, "utf8"), before);
+  assert.equal(first.user.name, "Haiyi");
+
+  const results = await Promise.allSettled(
+    Array.from({ length: 20 }, () => store.createTokenRankUser({ name: "same nickname" })),
+  );
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 19);
+  const users = persisted(storePath).users;
+  assert.equal(users.filter((user) => user.name === "same nickname").length, 1);
+});
+
+test("retired identities are excluded from the leaderboard and cannot upload", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const { token, user } = await store.createTokenRankUser({ name: "retired-user" });
+  const data = persisted(storePath);
+  data.users = data.users.map((candidate) => candidate.userId === user.userId
+    ? { ...candidate, active: false, retiredAt: new Date().toISOString() }
+    : candidate);
+  fs.writeFileSync(storePath, JSON.stringify(data));
+
+  const upload = await store.appendTokenRankUsage(token, {});
+  assert.deepEqual(upload, {
+    ok: false,
+    status: 410,
+    message: "此专属命令已停用，请使用保留的客户端",
+  });
+  const board = await store.getTokenRankLeaderboard({ range: "30d" });
+  assert.equal(board.totalMembers, 0);
+  assert.equal(board.entries.length, 0);
+});
+
+test("a retired nickname can be reclaimed by a new active identity", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const retired = await store.createTokenRankUser({ name: "南山客" });
+  const data = persisted(storePath);
+  data.users = data.users.map((candidate) => candidate.userId === retired.user.userId
+    ? { ...candidate, active: false, retiredAt: new Date().toISOString() }
+    : candidate);
+  fs.writeFileSync(storePath, JSON.stringify(data));
+
+  const replacement = await store.createTokenRankUser({ name: " 南山客 " });
+  assert.notEqual(replacement.user.userId, retired.user.userId);
+  assert.equal(replacement.user.name, "南山客");
+  const users = persisted(storePath).users;
+  assert.equal(users.filter((candidate) => candidate.name === "南山客" && candidate.active !== false).length, 1);
+});
+
 test("leaderboard aggregate covers every member and keeps total separate from norm", async (t) => {
   const { store } = await setupStore(t);
   const today = beijingDate();
