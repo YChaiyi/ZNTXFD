@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TokenRankData, TokenRankEntry } from "@/lib/data";
 import { replaceLegacyTokenRankOrigin } from "@/lib/tokenRankInstall";
@@ -309,7 +310,6 @@ function LeaderboardView({
   setActiveTab: (value: TabKey) => void;
   isRefreshing: boolean;
 }) {
-  const [followed, setFollowed] = useState(() => new Set<number>([10002, 10003]));
   const rankedEntries = useMemo(
     () => buildRankedEntries(data.entries, activeBoard, activeMetric),
     [activeBoard, activeMetric, data.entries],
@@ -323,15 +323,6 @@ function LeaderboardView({
   const myRank = rankedEntries.find((entry) => entry.userId === data.mySummary.userId);
   const rangeLabel = data.ranges.find((range) => range.key === activeRange)?.label ?? "今天";
   const boardLabel = data.boards.find((board) => board.key === activeBoard)?.label ?? "总榜";
-
-  function toggleFollow(userId: number) {
-    setFollowed((current) => {
-      const next = new Set(current);
-      if (next.has(userId)) next.delete(userId);
-      else next.add(userId);
-      return next;
-    });
-  }
 
   return (
     <div className="space-y-5">
@@ -448,6 +439,9 @@ function LeaderboardView({
               ? `≈${formatUsd(totalCost)}`
               : `${formatTokens(activeMetric === "norm" ? totalNorm : totalTokens)} tokens`}
           </p>
+          <p className="w-full text-sm text-foreground-muted">
+            点击昵称、头像或“查看主页”可查看完整统计。
+          </p>
         </div>
 
         {rankedEntries.length === 0 ? (
@@ -490,7 +484,11 @@ function LeaderboardView({
                 </div>
 
                 <div className="min-w-0">
-                  <div className="flex items-center gap-3">
+                  <Link
+                    href={`/token-rank/users/${entry.userId}`}
+                    aria-label={`查看 ${entry.name} 的个人主页`}
+                    className="flex items-center gap-3 rounded-lg outline-none transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  >
                     <InitialAvatar name={entry.name} rank={entry.displayRank} />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -503,7 +501,7 @@ function LeaderboardView({
                       </div>
                       <p className="mt-0.5 truncate text-xs text-foreground-muted">{entry.role}</p>
                     </div>
-                  </div>
+                  </Link>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {topTools.length > 0 ? topTools.map(([tool, value]) => (
                       <span
@@ -525,27 +523,12 @@ function LeaderboardView({
                 </div>
 
                 <div className="flex items-center justify-between gap-3 md:justify-end">
-                  {entry.userId !== data.mySummary.userId ? (
-                    <button
-                      type="button"
-                      onClick={() => toggleFollow(entry.userId)}
-                      className={`rounded-full p-2 transition-colors ${
-                        followed.has(entry.userId)
-                          ? "text-accent hover:text-accent-light"
-                          : "text-foreground-disabled hover:text-accent"
-                      }`}
-                      title={followed.has(entry.userId) ? "取消关注" : "关注 TA"}
-                    >
-                      <svg
-                        viewBox="0 0 20 20"
-                        fill="currentColor"
-                        className="h-5 w-5"
-                        aria-hidden="true"
-                      >
-                        <path d="M10 1.8l2.36 4.78 5.28.77-3.82 3.72.9 5.26L10 13.85l-4.72 2.48.9-5.26-3.82-3.72 5.28-.77L10 1.8z" />
-                      </svg>
-                    </button>
-                  ) : null}
+                  <Link
+                    href={`/token-rank/users/${entry.userId}`}
+                    className="inline-flex h-9 shrink-0 items-center rounded-full border border-accent/40 bg-accent/10 px-3 text-xs font-bold text-accent transition-colors hover:border-accent hover:bg-accent/20 hover:text-accent-light focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  >
+                    查看主页
+                  </Link>
                   <div className="text-right">
                     <p className="mono-num text-lg font-bold text-foreground">
                       {hasUsage ? formatMetricValue(entry, activeMetric) : "等待同步"}
@@ -760,7 +743,6 @@ function ConnectView({ data }: { data: TokenRankData }) {
 }
 
 function MineView({ data }: { data: TokenRankData }) {
-  const [publicProfile, setPublicProfile] = useState(data.mySummary.public);
   const [loginToken, setLoginToken] = useState("");
   const [loginError, setLoginError] = useState("");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -900,26 +882,11 @@ function MineView({ data }: { data: TokenRankData }) {
   return (
     <div className="space-y-5">
       <section className="glass-card p-6 md:p-7">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-bold tracking-[0.24em] text-accent">我的用量</p>
-            <h1 className="mt-4 text-3xl font-bold text-foreground">{profileName}的 Token 主页</h1>
-            <p className="mt-3 text-sm leading-7 text-foreground-muted">
-              真实账号 · 最近同步 {lastSync} · {deviceCount} 台设备。
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setPublicProfile((value) => !value)}
-            className={`rounded-full px-4 py-2 text-sm font-bold transition-colors ${
-              publicProfile
-                ? "bg-success/15 text-success"
-                : "bg-white/[0.04] text-foreground-muted"
-            }`}
-          >
-            {publicProfile ? "个人页公开" : "个人页私密"}
-          </button>
-        </div>
+        <p className="text-xs font-bold tracking-[0.24em] text-accent">我的用量</p>
+        <h1 className="mt-4 text-3xl font-bold text-foreground">{profileName}的 Token 主页</h1>
+        <p className="mt-3 text-sm leading-7 text-foreground-muted">
+          真实账号 · 最近同步 {lastSync} · {deviceCount} 台设备。
+        </p>
       </section>
 
       <section className="grid gap-3 md:grid-cols-4">

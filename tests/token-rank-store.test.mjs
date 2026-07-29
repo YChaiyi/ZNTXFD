@@ -401,3 +401,111 @@ test("leaderboard aggregate covers every member and keeps total separate from no
   assert.ok(board.aggregate.norm > visibleNorm);
   assert.notEqual(board.aggregate.total, board.aggregate.norm);
 });
+
+test("public profiles expose active legacy identities with complete sanitized aggregates", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const { token, user } = await store.createTokenRankUser({ name: "public-profile", role: "测试角色" });
+  const today = beijingDate();
+  const earlier = addDays(today, -2);
+
+  await store.appendTokenRankUsage(token, {
+    deviceId: DEVICE_A,
+    clientVersion: "0.1.0",
+    records: [
+      legacyRecord({ date: today, tool: "codex", model: "today-codex" }),
+      legacyRecord({ date: earlier, tool: "claude-code", model: "earlier-claude" }),
+    ],
+  });
+  await store.appendTokenRankUsage(token, {
+    deviceId: DEVICE_B,
+    clientVersion: "0.1.0",
+    records: [legacyRecord({ date: earlier, tool: "cursor", model: "earlier-cursor" })],
+  });
+
+  const data = persisted(storePath);
+  data.users = data.users.map((candidate) => candidate.userId === user.userId
+    ? { ...candidate, public: false }
+    : candidate);
+  data.collectors.push({
+    userId: user.userId,
+    tokenHash: user.tokenHash,
+    deviceId: DEVICE_A,
+    tool: "codex",
+    protocolVersion: 2,
+    clientVersion: "0.2.0",
+    observedThrough: "2030-01-01T00:00:00.000Z",
+    lastSync: "2030-01-01T00:00:00.000Z",
+  });
+  fs.writeFileSync(storePath, JSON.stringify(data));
+
+  const profile = await store.getTokenRankPublicProfile(user.userId);
+  assert.ok(profile, "legacy public:false must not hide an active profile");
+  assert.deepEqual(profile.user, {
+    userId: user.userId,
+    name: "public-profile",
+    role: "测试角色",
+  });
+  assert.deepEqual(profile.totals, {
+    total: 450,
+    norm: 270,
+    cost: 0.00027,
+    activeDays: 2,
+    deviceCount: 2,
+    lastSync: "2030-01-01T00:00:00.000Z",
+  });
+  assert.deepEqual(profile.todayTotals, {
+    total: 110,
+    norm: 50,
+    cost: 0.000066,
+    activeDays: 1,
+    deviceCount: 1,
+    lastSync: "2030-01-01T00:00:00.000Z",
+  });
+  assert.deepEqual(profile.byTool, {
+    codex: 110,
+    "claude-code": 170,
+    cursor: 170,
+  });
+  assert.deepEqual(profile.byModel, {
+    "today-codex": 110,
+    "earlier-claude": 170,
+    "earlier-cursor": 170,
+  });
+  assert.deepEqual(profile.daily, [
+    { date: earlier, total: 340, norm: 220, cost: 0.000204 },
+    { date: today, total: 110, norm: 50, cost: 0.000066 },
+  ]);
+
+  const serialized = JSON.stringify(profile);
+  assert.equal(serialized.includes(token), false);
+  assert.equal(serialized.includes(user.tokenHash), false);
+  assert.equal(serialized.includes(user.createdAt), false);
+  assert.equal(serialized.includes(DEVICE_A), false);
+  assert.equal(serialized.includes("0.1.0"), false);
+  assert.equal(serialized.includes("collector"), false);
+  assert.equal(Object.hasOwn(persisted(storePath).users[0], "public"), true);
+});
+
+test("public profiles reject invalid, missing, and retired identities", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const { user } = await store.createTokenRankUser({ name: "retired-public-profile" });
+
+  assert.equal(await store.getTokenRankPublicProfile(0), null);
+  assert.equal(await store.getTokenRankPublicProfile(-1), null);
+  assert.equal(await store.getTokenRankPublicProfile(Number.MAX_SAFE_INTEGER + 1), null);
+  assert.equal(await store.getTokenRankPublicProfile(user.userId + 1), null);
+
+  const data = persisted(storePath);
+  data.users = data.users.map((candidate) => candidate.userId === user.userId
+    ? { ...candidate, active: false, retiredAt: new Date().toISOString() }
+    : candidate);
+  fs.writeFileSync(storePath, JSON.stringify(data));
+  assert.equal(await store.getTokenRankPublicProfile(user.userId), null);
+});
+
+test("new Token Rank identities do not persist the retired public visibility flag", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const { user } = await store.createTokenRankUser({ name: "no-public-flag" });
+  const stored = persisted(storePath).users.find((candidate) => candidate.userId === user.userId);
+  assert.equal(Object.hasOwn(stored, "public"), false);
+});

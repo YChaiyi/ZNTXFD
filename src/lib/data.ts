@@ -491,7 +491,6 @@ export type TokenRankEntry = {
 export type TokenRankMySummary = {
   userId: number;
   name: string;
-  public: boolean;
   lastSync: string;
   activeDays: number;
   deviceCount: number;
