@@ -67,6 +67,22 @@ def check_topic(topic, index):
         fail(f"topic {title!r} has no tags")
 
 
+def check_action_items(topics):
+    holders = {}
+    for topic in topics:
+        title = str(topic.get("title") or "").strip()
+        for action in as_list(topic.get("action_items")):
+            action_text = str(action).strip()
+            if not action_text:
+                fail(f"topic {title!r} has an empty action item")
+            if action_text in holders:
+                fail(
+                    "action item duplicated across topics "
+                    f"({holders[action_text]!r} and {title!r}): {action_text!r}"
+                )
+            holders[action_text] = title
+
+
 def main():
     args = parse_args()
     path = args.daily_dir / f"{args.date}.json"
@@ -85,6 +101,8 @@ def main():
         if not isinstance(topic, dict):
             fail(f"topic #{index} is not an object")
         check_topic(topic, index)
+
+    check_action_items(topics)
 
     print(f"Quality OK: {path} ({len(topics)} topics)")
 
