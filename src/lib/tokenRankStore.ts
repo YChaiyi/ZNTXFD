@@ -10,6 +10,10 @@ export type TokenRankUser = {
   role: string;
   createdAt: string;
   public: boolean;
+  // Omitted on legacy identities; those remain active until explicitly retired.
+  active?: boolean;
+  retiredAt?: string;
+  retiredReason?: string;
 };
 
 export type TokenRankUsageRecord = {
@@ -143,6 +147,22 @@ const HISTORY_DAYS = 35;
 const CACHE_INCLUSIVE_TOOLS = new Set(["codex"]);
 export const TOKEN_RANK_COOKIE = "znt_token_rank_token";
 
+export class TokenRankRegistrationError extends Error {
+  readonly status: 400 | 409;
+  readonly code: "invalid_nickname" | "nickname_taken";
+
+  constructor(
+    status: 400 | 409,
+    code: "invalid_nickname" | "nickname_taken",
+    message: string,
+  ) {
+    super(message);
+    this.name = "TokenRankRegistrationError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 let localMutationQueue = Promise.resolve();
 
 function emptyStore(): TokenRankStore {
@@ -236,6 +256,23 @@ async function mutateStore<T>(mutation: (store: TokenRankStore) => MutationResul
 
 function hashToken(token: string) {
   return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+export function normalizeTokenRankNickname(value: string | undefined) {
+  if (typeof value !== "string") return "";
+  return value
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .slice(0, 32);
+}
+
+function tokenRankNicknameKey(value: string | undefined) {
+  return normalizeTokenRankNickname(value).toLowerCase();
+}
+
+export function isTokenRankUserActive(user: TokenRankUser) {
+  return user.active !== false;
 }
 
 function generateToken() {
@@ -497,23 +534,43 @@ function generateUserId(users: TokenRankUser[]) {
 }
 
 export async function createTokenRankUser(input: { name: string; role?: string }) {
+  const name = normalizeTokenRankNickname(input.name);
+  if (!name) {
+    throw new TokenRankRegistrationError(400, "invalid_nickname", "请填写昵称后再生成专属命令");
+  }
+
+  const nicknameKey = tokenRankNicknameKey(name);
   const now = new Date().toISOString();
   const token = generateToken();
   const tokenHash = hashToken(token);
   const user = await mutateStore((store) => {
     const existing = store.users.find((candidate) => candidate.tokenHash === tokenHash);
     if (existing) return { changed: false, value: existing };
+    if (store.users.some(
+      (candidate) => isTokenRankUserActive(candidate) && tokenRankNicknameKey(candidate.name) === nicknameKey,
+    )) {
+      return { changed: false, value: null };
+    }
     const created: TokenRankUser = {
       userId: generateUserId(store.users),
       tokenHash,
-      name: input.name.trim().slice(0, 32) || "智能体先锋队群友",
+      name,
       role: input.role?.trim().slice(0, 32) || "自助上榜用户",
       createdAt: now,
       public: true,
+      active: true,
     };
     store.users.push(created);
     return { changed: true, value: created };
   });
+
+  if (!user) {
+    throw new TokenRankRegistrationError(
+      409,
+      "nickname_taken",
+      "该昵称已被使用，请更换昵称后再生成专属命令",
+    );
+  }
 
   return { user, token };
 }
@@ -555,6 +612,12 @@ export async function appendTokenRankUsage(
       return {
         changed: false,
         value: { ok: false as const, status: 401, message: "上报 token 无效" },
+      };
+    }
+    if (!isTokenRankUserActive(user)) {
+      return {
+        changed: false,
+        value: { ok: false as const, status: 410, message: "此专属命令已停用，请使用保留的客户端" },
       };
     }
 
@@ -745,7 +808,8 @@ export async function getTokenRankLeaderboard(params: {
   const metric = params.metric || "total";
   const { start, end } = dateRange(range);
   const records = store.records.filter((record) => record.date >= start && record.date <= end);
-  const usersByTokenHash = new Map(store.users.map((user) => [user.tokenHash, user]));
+  const activeUsers = store.users.filter(isTokenRankUserActive);
+  const usersByTokenHash = new Map(activeUsers.map((user) => [user.tokenHash, user]));
   const grouped = new Map<string, {
     user: TokenRankUser;
     total: number;
@@ -778,7 +842,7 @@ export async function getTokenRankLeaderboard(params: {
     grouped.set(user.tokenHash, current);
   }
 
-  const liveEntries: TokenRankEntry[] = store.users.map((user) => {
+  const liveEntries: TokenRankEntry[] = activeUsers.map((user) => {
     const item = grouped.get(user.tokenHash);
     return {
       rank: 0,
@@ -846,7 +910,7 @@ export async function getTokenRankLeaderboard(params: {
     metric,
     entries: sorted,
     aggregate,
-    totalMembers: store.users.length,
+    totalMembers: activeUsers.length,
     updatedAt: store.lastUploadAt,
   };
 }
