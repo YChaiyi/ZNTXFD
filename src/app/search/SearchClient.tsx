@@ -160,7 +160,7 @@ export function SearchClient({ searchIndex }: SearchClientProps) {
         </span>
       </div>
 
-      <div className="glass-card mb-5 p-4 md:p-6">
+      <div className="glass-card mb-5 p-4 transition-colors focus-within:border-accent/60 md:p-6">
         <label className="flex items-center gap-3">
           <SearchIcon className="h-5 w-5 shrink-0 text-accent" />
           <span className="sr-only">搜索关键词</span>

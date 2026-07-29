@@ -304,7 +304,7 @@ export function KnowledgeDirectoryClient({
           </div>
 
           <div className="rounded-[14px] border border-white/[0.07] bg-[#121217] p-4">
-            <label className="flex min-h-12 items-center gap-3 rounded-[10px] border border-white/[0.08] bg-[#09090b] px-4">
+            <label className="flex min-h-12 items-center gap-3 rounded-[10px] border border-white/[0.08] bg-[#09090b] px-4 transition-colors focus-within:border-accent/60">
               <span className="text-lg text-accent">⌕</span>
               <span className="sr-only">搜索知识库</span>
               <input
