@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { KnowledgeCard } from "@/components/KnowledgeCard";
 import {
   getDailyIndex,
   getDailyReport,
@@ -6,7 +7,7 @@ import {
   getQuestionItems,
   getTrustedKnowledgeItems,
 } from "@/lib/data";
-import type { DailyIndexItem, DailyReport, TrustedKnowledgeItem } from "@/lib/data";
+import type { DailyIndexItem, DailyReport } from "@/lib/data";
 
 const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
@@ -86,43 +87,6 @@ function SectionTitle({
         </Link>
       ) : null}
     </div>
-  );
-}
-
-function KnowledgeFeature({ item }: { item: TrustedKnowledgeItem }) {
-  const verdict = item.rating === "AAA" ? "AAA" : item.rating === "AA" ? "AA" : "待验证";
-
-  return (
-    <Link
-      href={`/knowledge/${item.slug}`}
-      className="group relative flex min-h-[196px] flex-col gap-3 overflow-hidden rounded-2xl border border-accent/25 bg-[#111116] p-5 transition-all hover:-translate-y-1 hover:border-accent/60 hover:shadow-[0_18px_42px_-20px_rgba(0,0,0,0.85)]"
-    >
-      <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,143,42,0.10),rgba(255,143,42,0.015))]" />
-      <div className="relative flex items-center gap-2">
-        <span className="rounded-full bg-success px-3 py-1 text-xs font-black text-background">
-          {verdict}
-        </span>
-        <span className="text-xs text-foreground-muted">
-          {item.category} · {item.tags[0] ?? "知识"}
-        </span>
-        <span className="ml-auto text-xs font-bold text-success">可信知识</span>
-      </div>
-      <h3 className="relative line-clamp-2 text-lg font-black leading-snug text-foreground group-hover:text-accent-light">
-        {item.title}
-      </h3>
-      <p className="relative line-clamp-3 flex-1 text-sm leading-6 text-foreground-muted">
-        {item.summary}
-      </p>
-      <div className="relative flex flex-wrap items-center gap-3 border-t border-white/[0.08] pt-3 text-xs text-foreground-muted">
-        <span>
-          <span className="mono-num text-xl font-black text-accent">{item.rating ?? "A"}</span>
-          <span className="ml-1">评级</span>
-        </span>
-        <span>证据 {item.evidenceCount}</span>
-        <span>来源 {item.sourceCount ?? item.evidenceCount}</span>
-        <span>引用 {item.citationCount}</span>
-      </div>
-    </Link>
   );
 }
 
@@ -246,7 +210,7 @@ export default async function Home() {
             />
             <div className="grid gap-4 md:grid-cols-3">
               {trustedItems.slice(0, 3).map((item) => (
-                <KnowledgeFeature key={item.slug} item={item} />
+                <KnowledgeCard key={item.slug} item={item} />
               ))}
             </div>
           </section>
