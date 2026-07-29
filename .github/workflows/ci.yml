@@ -36,8 +36,6 @@ jobs:
           cache: npm
       - name: Install and validate source-only tree
         env:
-          ACCESS_PASSWORD: ci-password
-          ACCESS_SESSION_SECRET: ci-session-secret-with-at-least-32-characters
           TOKEN_RANK_STORE_PATH: ${{ runner.temp }}/token-rank-store.json
         run: |
           cd "$RUNNER_TEMP/znt-source"

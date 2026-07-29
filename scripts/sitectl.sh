@@ -122,27 +122,58 @@ try {
   expectedContentVersion = JSON.parse(fs.readFileSync(versionStampPath, "utf8")).contentVersion || null;
 } catch {}
 
-(async () => {
-  if (!password) throw new Error("Missing ZNT_SITE_PASSWORD or ACCESS_PASSWORD for site:verify");
-  const login = await fetch(`${baseUrl}/api/auth/verify`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ password }),
+async function fetchSite(headers = {}) {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers,
     redirect: "manual",
   });
-  if (!login.ok) throw new Error(`Site login failed with HTTP ${login.status}`);
-  const rawCookie = login.headers.getSetCookie?.()[0] || login.headers.get("set-cookie") || "";
-  const cookie = rawCookie.split(";", 1)[0];
-  if (!cookie) throw new Error("Site login did not return a session cookie");
-  const response = await fetch(url, { cache: "no-store", headers: { cookie } });
-  const text = await response.text();
-  const hasDate = text.includes(date) || text.includes(date.slice(5).replace("-", "月"));
-  const hasTitle = title ? text.includes(title) : true;
+  const text = response.status === 200 ? await response.text() : "";
   const health = await fetch(`${baseUrl}/api/content-version`, {
     cache: "no-store",
-    headers: { cookie },
+    headers,
+    redirect: "manual",
   });
   const healthBody = await health.json().catch(() => null);
+  return { response, text, health, healthBody };
+}
+
+function requiresLegacyLogin(response) {
+  if (response.status === 401 || response.status === 403) return true;
+  if (response.status < 300 || response.status >= 400) return false;
+  const location = response.headers.get("location");
+  if (!location) return false;
+  try {
+    return new URL(location, baseUrl).pathname === "/login";
+  } catch {
+    return false;
+  }
+}
+
+(async () => {
+  let accessMode = "public";
+  let result = await fetchSite();
+  if (requiresLegacyLogin(result.response) || requiresLegacyLogin(result.health)) {
+    if (!password) {
+      throw new Error("Site still requires a password, but no legacy verification password is configured");
+    }
+    const login = await fetch(`${baseUrl}/api/auth/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+      redirect: "manual",
+    });
+    if (!login.ok) throw new Error(`Legacy site login failed with HTTP ${login.status}`);
+    const rawCookie = login.headers.getSetCookie?.()[0] || login.headers.get("set-cookie") || "";
+    const cookie = rawCookie.split(";", 1)[0];
+    if (!cookie) throw new Error("Legacy site login did not return a session cookie");
+    result = await fetchSite({ cookie });
+    accessMode = "authenticated";
+  }
+
+  const { response, text, health, healthBody } = result;
+  const hasDate = text.includes(date) || text.includes(date.slice(5).replace("-", "月"));
+  const hasTitle = title ? text.includes(title) : true;
   const hasContentVersion = health.ok && typeof healthBody?.contentVersion === "string" && healthBody.contentVersion;
   const contentVersionMatches = expectedContentVersion
     ? healthBody?.contentVersion === expectedContentVersion
@@ -158,6 +189,7 @@ try {
     contentVersion: healthBody?.contentVersion ?? null,
     expectedContentVersion,
     contentVersionMatches,
+    accessMode,
     ok,
   }, null, 2));
   process.exit(ok ? 0 : 1);
