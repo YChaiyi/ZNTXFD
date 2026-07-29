@@ -9,11 +9,43 @@ export type TokenRankUser = {
   name: string;
   role: string;
   createdAt: string;
-  public: boolean;
+  // Retained for compatibility with identities created before public profiles
+  // became unconditional. It no longer controls profile visibility.
+  public?: boolean;
   // Omitted on legacy identities; those remain active until explicitly retired.
   active?: boolean;
   retiredAt?: string;
   retiredReason?: string;
+};
+
+export type TokenRankPublicProfileStats = {
+  total: number;
+  norm: number;
+  cost: number;
+  activeDays: number;
+  deviceCount: number;
+  lastSync: string;
+};
+
+export type TokenRankPublicProfileDaily = {
+  date: string;
+  total: number;
+  norm: number;
+  cost: number;
+};
+
+export type TokenRankPublicProfile = {
+  user: {
+    userId: number;
+    name: string;
+    role: string;
+  };
+  today: string;
+  totals: TokenRankPublicProfileStats;
+  todayTotals: TokenRankPublicProfileStats;
+  byTool: Record<string, number>;
+  byModel: Record<string, number>;
+  daily: TokenRankPublicProfileDaily[];
 };
 
 export type TokenRankUsageRecord = {
@@ -557,7 +589,6 @@ export async function createTokenRankUser(input: { name: string; role?: string }
       name,
       role: input.role?.trim().slice(0, 32) || "自助上榜用户",
       createdAt: now,
-      public: true,
       active: true,
     };
     store.users.push(created);
@@ -765,6 +796,69 @@ function summarizeRecords(records: TokenRankUsageRecord[]) {
     lastSync,
     byTool,
     byModel,
+  };
+}
+
+function publicProfileStats(summary: ReturnType<typeof summarizeRecords>, lastSync: string) {
+  return {
+    total: summary.total,
+    norm: summary.norm,
+    cost: summary.cost,
+    activeDays: summary.activeDays,
+    deviceCount: summary.deviceCount,
+    lastSync: lastSync > summary.lastSync ? lastSync : summary.lastSync,
+  };
+}
+
+function aggregateDailyPublicProfile(records: TokenRankUsageRecord[]): TokenRankPublicProfileDaily[] {
+  const grouped = new Map<string, { total: number; norm: number }>();
+  for (const record of records) {
+    const current = grouped.get(record.date) ?? { total: 0, norm: 0 };
+    current.total += record.totalTokens;
+    current.norm += record.inputTokens + record.outputTokens;
+    grouped.set(record.date, current);
+  }
+
+  return [...grouped.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([date, values]) => ({
+      date,
+      total: values.total,
+      norm: values.norm,
+      cost: estimateCost(values.total),
+    }));
+}
+
+export async function getTokenRankPublicProfile(userId: number): Promise<TokenRankPublicProfile | null> {
+  if (!Number.isSafeInteger(userId) || userId <= 0) return null;
+
+  const store = await readStore();
+  const user = store.users.find((candidate) => candidate.userId === userId);
+  if (!user || !isTokenRankUserActive(user)) return null;
+
+  const records = store.records.filter((record) => record.tokenHash === user.tokenHash);
+  const collectorLastSync = store.collectors.reduce(
+    (latest, state) => state.tokenHash === user.tokenHash && state.lastSync > latest
+      ? state.lastSync
+      : latest,
+    "",
+  );
+  const today = beijingDate();
+  const totals = summarizeRecords(records);
+  const todayTotals = summarizeRecords(records.filter((record) => record.date === today));
+
+  return {
+    user: {
+      userId: user.userId,
+      name: user.name,
+      role: user.role,
+    },
+    today,
+    totals: publicProfileStats(totals, collectorLastSync),
+    todayTotals: publicProfileStats(todayTotals, collectorLastSync),
+    byTool: totals.byTool,
+    byModel: totals.byModel,
+    daily: aggregateDailyPublicProfile(records),
   };
 }
 

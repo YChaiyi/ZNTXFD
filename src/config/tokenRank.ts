@@ -47,7 +47,6 @@ export const TOKEN_RANK_CONFIG: TokenRankData = {
   mySummary: {
     userId: 0,
     name: "未接入用户",
-    public: true,
     lastSync: "",
     activeDays: 0,
     deviceCount: 0,
