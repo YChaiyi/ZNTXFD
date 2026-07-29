@@ -67,6 +67,10 @@ test("restricted SSH accounts use root-owned forced-command dispatchers", () => 
   assert.match(bootstrap, /sshd -T -C "user=\$account,host=localhost,addr=127\.0\.0\.1"/);
   assert.match(bootstrap, /validate_effective_ssh_account zntdeploy \/usr\/local\/bin\/znt-deploy-ssh/);
   assert.match(bootstrap, /validate_effective_ssh_account zntcontent \/usr\/local\/bin\/znt-content-ssh/);
+  assert.match(bootstrap, /install -o root -g "\$account" -m 0640 \/dev\/null "\$key_file"/);
+  assert.match(bootstrap, /chown root:"\$account" "\$key_file"/);
+  assert.match(bootstrap, /chmod 0640 "\$key_file"/);
+  assert.match(bootstrap, /"root:\$account 640"/);
 });
 
 test("code deployment accepts only a SHA and binds it to public GitHub main", () => {
