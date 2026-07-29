@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -28,20 +29,22 @@ function sourceFingerprint() {
     "postcss.config.mjs",
     "package.json",
   ];
-  let newest = 0;
-  const visit = (target) => {
+  const hash = crypto.createHash("sha256");
+  const visit = (target, relative) => {
     const stat = fs.statSync(target);
     if (stat.isDirectory()) {
-      for (const entry of fs.readdirSync(target)) visit(path.join(target, entry));
-    } else if (stat.mtimeMs > newest) {
-      newest = stat.mtimeMs;
+      for (const entry of fs.readdirSync(target).sort()) {
+        visit(path.join(target, entry), `${relative}/${entry}`);
+      }
+    } else {
+      hash.update(`${relative}\0${stat.mtimeMs}\0${stat.size}\n`);
     }
   };
   for (const root of roots) {
     const absolute = path.join(projectRoot, root);
-    if (fs.existsSync(absolute)) visit(absolute);
+    if (fs.existsSync(absolute)) visit(absolute, root);
   }
-  return String(newest);
+  return hash.digest("hex");
 }
 
 function hasFreshBuild(fingerprint) {
@@ -74,10 +77,15 @@ export function buildApp() {
     } catch {
       try {
         if (Date.now() - fs.statSync(buildLockDir).mtimeMs > LOCK_STALE_MS) {
-          fs.rmSync(buildLockDir, { recursive: true, force: true });
+          // Atomic rename so only one waiter can steal an abandoned lock;
+          // a stat-then-delete pair could remove a lock that was just
+          // re-acquired by another process.
+          const graveyard = `${buildLockDir}.stale-${process.pid}`;
+          fs.renameSync(buildLockDir, graveyard);
+          fs.rmSync(graveyard, { recursive: true, force: true });
         }
       } catch {
-        // Lock vanished between the failed mkdir and the stat; retry.
+        // Lock vanished or another waiter won the steal; retry.
       }
       if (Date.now() > deadline) {
         throw new Error("timed out waiting for a concurrent next build");
