@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TokenRankData, TokenRankEntry } from "@/lib/data";
+import { replaceLegacyTokenRankOrigin } from "@/lib/tokenRankInstall";
 
 type TabKey = "leaderboard" | "connect" | "mine" | "rules";
 type MetricKey = "total" | "norm" | "cost";
@@ -15,13 +16,36 @@ type RegisteredConnection = {
   token: string;
   installMac: string;
   installWin: string;
-  agentPrompt: string;
+  agentPrompt?: string;
   user: {
     userId: number;
     name: string;
     role: string;
   };
 };
+
+function migrateLegacyConnection(connection: RegisteredConnection) {
+  const installMac = replaceLegacyTokenRankOrigin(connection.installMac);
+  const installWin = replaceLegacyTokenRankOrigin(connection.installWin);
+  const agentPrompt = typeof connection.agentPrompt === "string"
+    ? replaceLegacyTokenRankOrigin(connection.agentPrompt)
+    : undefined;
+
+  if (
+    installMac === connection.installMac
+    && installWin === connection.installWin
+    && agentPrompt === connection.agentPrompt
+  ) {
+    return connection;
+  }
+
+  return {
+    ...connection,
+    installMac,
+    installWin,
+    ...(agentPrompt === undefined ? {} : { agentPrompt }),
+  };
+}
 
 const tabs: { key: TabKey; label: string }[] = [
   { key: "leaderboard", label: "排行榜" },
@@ -561,10 +585,18 @@ function ConnectView({ data }: { data: TokenRankData }) {
       const cached = window.localStorage.getItem("znt-token-rank-connection");
       if (!cached) return;
       const parsed = JSON.parse(cached) as RegisteredConnection;
-      if (parsed?.token && parsed?.installMac && parsed?.installWin) {
-        setConnection(parsed);
+      if (
+        typeof parsed?.token === "string"
+        && typeof parsed.installMac === "string"
+        && typeof parsed.installWin === "string"
+      ) {
+        const connection = migrateLegacyConnection(parsed);
+        setConnection(connection);
         setName(parsed.user?.name ?? "");
         setRole(parsed.user?.role ?? "");
+        if (connection !== parsed) {
+          window.localStorage.setItem("znt-token-rank-connection", JSON.stringify(connection));
+        }
       }
     } catch {
       window.localStorage.removeItem("znt-token-rank-connection");
