@@ -96,15 +96,18 @@ reading legacy world-readable content outside the build sandbox.
 
 After migration verification, install the Actions key only for `zntdeploy`
 and the daily workstation key only for `zntcontent`. Both accounts have locked
-passwords. The key files and SSH policy are root-owned; `ForceCommand` accepts
-only `deploy-code <sha>` or `upload-content`/`promote-content`.
+passwords. The key files and SSH policy are root-owned; each key file is
+group-readable only by its matching restricted account and is not writable by
+that account. `ForceCommand` accepts only `deploy-code <sha>` or
+`upload-content`/`promote-content`.
 Prefix each public-key line with `restrict` as an additional OpenSSH defense:
 
 ```bash
 sudoedit /etc/ssh/authorized_keys/zntdeploy
 sudoedit /etc/ssh/authorized_keys/zntcontent
-sudo chown root:root /etc/ssh/authorized_keys/zntdeploy /etc/ssh/authorized_keys/zntcontent
-sudo chmod 0600 /etc/ssh/authorized_keys/zntdeploy /etc/ssh/authorized_keys/zntcontent
+sudo chown root:zntdeploy /etc/ssh/authorized_keys/zntdeploy
+sudo chown root:zntcontent /etc/ssh/authorized_keys/zntcontent
+sudo chmod 0640 /etc/ssh/authorized_keys/zntdeploy /etc/ssh/authorized_keys/zntcontent
 sudo /usr/sbin/sshd -t
 sudo systemctl reload ssh.service
 ```

@@ -165,13 +165,14 @@ install_ssh_restrictions() {
   for account in zntdeploy zntcontent; do
     key_file="/etc/ssh/authorized_keys/$account"
     if [[ ! -e "$key_file" ]]; then
-      install -o root -g root -m 0600 /dev/null "$key_file"
+      install -o root -g "$account" -m 0640 /dev/null "$key_file"
     fi
     [[ -f "$key_file" && ! -L "$key_file" ]] \
       || znt_fail "restricted authorized-keys file is invalid: $key_file"
-    [[ "$(stat -c '%U:%G' "$key_file")" = "root:root" ]] \
-      || znt_fail "restricted authorized-keys file must be root-owned: $key_file"
-    chmod 0600 "$key_file"
+    chown root:"$account" "$key_file"
+    chmod 0640 "$key_file"
+    [[ "$(stat -c '%U:%G %a' "$key_file")" = "root:$account 640" ]] \
+      || znt_fail "restricted authorized-keys file has invalid ownership or mode: $key_file"
   done
 
   if [[ -e "$drop_in" ]]; then
