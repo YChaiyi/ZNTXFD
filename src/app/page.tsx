@@ -159,7 +159,7 @@ export default async function Home() {
                   <Link
                     key={chip.key}
                     href={`/daily/${latest.date}#digest-${chip.key}`}
-                    className="inline-flex min-h-8 items-center gap-2 rounded-full border border-white/[0.09] bg-[#191920] px-3 py-1.5 text-xs font-semibold text-foreground-muted transition-colors hover:border-accent/40 hover:text-accent"
+                    className="touch-target inline-flex min-h-8 items-center gap-2 rounded-full border border-white/[0.09] bg-[#191920] px-3 py-1.5 text-xs font-semibold text-foreground-muted transition-colors hover:border-accent/40 hover:text-accent"
                   >
                     {chip.label}
                     {chip.count != null ? (
@@ -239,22 +239,22 @@ export default async function Home() {
             aria-label="更多入口"
             className="flex flex-wrap gap-x-6 gap-y-3 border-t border-white/[0.06] pt-5 text-sm font-semibold"
           >
-            <Link href="/daily" className="text-foreground-muted hover:text-accent">
+            <Link href="/daily" className="touch-target inline-flex min-h-11 items-center text-foreground-muted hover:text-accent">
               全部期刊归档 →
             </Link>
             <Link
               href={`/daily/${latest.date}`}
-              className="text-foreground-muted hover:text-accent"
+              className="touch-target inline-flex min-h-11 items-center text-foreground-muted hover:text-accent"
             >
               本期索引 →
             </Link>
-            <Link href="/token-rank" className="text-foreground-muted hover:text-accent">
+            <Link href="/token-rank" className="touch-target inline-flex min-h-11 items-center text-foreground-muted hover:text-accent">
               Token 消耗榜 →
             </Link>
-            <Link href="/topics" className="text-foreground-muted hover:text-accent">
+            <Link href="/topics" className="touch-target inline-flex min-h-11 items-center text-foreground-muted hover:text-accent">
               知识脉络 →
             </Link>
-            <Link href="/search" className="text-foreground-muted hover:text-accent">
+            <Link href="/search" className="touch-target inline-flex min-h-11 items-center text-foreground-muted hover:text-accent">
               搜索 →
             </Link>
           </nav>

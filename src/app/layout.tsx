@@ -45,11 +45,11 @@ export default function RootLayout({
                 href="https://bbs.znt.group/"
                 target="_blank"
                 rel="noreferrer"
-                className="text-foreground-muted hover:text-accent"
+                className="touch-target inline-flex min-h-11 items-center text-foreground-muted hover:text-accent"
               >
                 先锋智能体论坛 ↗
               </a>
-              <Link href="/token-rank" className="text-foreground-muted hover:text-accent">
+              <Link href="/token-rank" className="touch-target inline-flex min-h-11 items-center text-foreground-muted hover:text-accent">
                 Token榜
               </Link>
             </nav>

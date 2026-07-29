@@ -194,7 +194,7 @@ export function TopBar() {
           </span>
           <a
             href="#join"
-            className="inline-flex h-10 shrink-0 items-center rounded-lg bg-gradient-to-b from-accent-light to-accent px-4 text-sm font-black text-background transition-transform hover:-translate-y-0.5"
+            className="touch-target inline-flex h-10 shrink-0 items-center rounded-lg bg-gradient-to-b from-accent-light to-accent px-4 text-sm font-black text-background transition-transform hover:-translate-y-0.5"
           >
             加入社群
           </a>
