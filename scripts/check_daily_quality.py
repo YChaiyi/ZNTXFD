@@ -72,7 +72,9 @@ def check_action_items(topics):
     for topic in topics:
         title = str(topic.get("title") or "").strip()
         for action in as_list(topic.get("action_items")):
-            action_text = str(action).strip()
+            # Collapse whitespace the same way the generator does, so
+            # duplicates differing only in spacing cannot evade the check.
+            action_text = " ".join(str(action).split())
             if not action_text:
                 fail(f"topic {title!r} has an empty action item")
             if action_text in holders:

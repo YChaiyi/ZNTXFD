@@ -139,8 +139,8 @@ test("quality check rejects action items duplicated across topics", (t) => {
   fs.writeFileSync(path.join(dailyDir, "2026-05-20.json"), JSON.stringify({
     date: "2026-05-20",
     topics: [
-      { ...topicBase, title: "话题一", action_items: ["重复的建议"] },
-      { ...topicBase, title: "话题二", action_items: ["重复的建议"] },
+      { ...topicBase, title: "话题一", action_items: ["重复的 建议"] },
+      { ...topicBase, title: "话题二", action_items: ["重复的  建议"] },
     ],
   }, null, 2));
 
