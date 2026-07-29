@@ -5,7 +5,7 @@ const TONES: Record<string, string> = {
 };
 
 export function RatingBadge({ rating }: { rating?: string }) {
-  const known = rating && TONES[rating] ? rating : null;
+  const known = rating && Object.hasOwn(TONES, rating) ? rating : null;
   const tone = known
     ? TONES[known]
     : "border-white/[0.14] bg-white/[0.05] text-foreground-muted";
