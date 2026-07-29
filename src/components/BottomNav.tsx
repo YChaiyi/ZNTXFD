@@ -112,7 +112,9 @@ export function BottomNav() {
 
   return (
     <>
-      <div
+      <nav
+        id="bottom-more-panel"
+        aria-label="更多入口"
         data-more-panel
         className={`fixed bottom-[72px] left-0 right-0 z-50 border-t border-white/[0.07] bg-background/95 px-4 py-2 backdrop-blur-[20px] md:hidden ${
           moreOpen ? "" : "hidden"
@@ -141,7 +143,7 @@ export function BottomNav() {
             </Link>
           ),
         )}
-      </div>
+      </nav>
 
       <nav className="fixed bottom-0 left-0 right-0 z-50 grid h-[72px] grid-cols-5 border-t border-white/[0.07] bg-background/90 px-1 backdrop-blur-[20px] md:hidden">
         {tabs.map((tab) => {
@@ -168,6 +170,7 @@ export function BottomNav() {
         <button
           type="button"
           aria-expanded={moreOpen}
+          aria-controls="bottom-more-panel"
           onClick={() => setMoreOpen((open) => !open)}
           className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold transition-colors ${
             moreOpen ? "bg-accent/15 text-accent" : "text-foreground-muted hover:text-foreground"
