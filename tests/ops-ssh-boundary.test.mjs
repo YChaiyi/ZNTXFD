@@ -120,3 +120,8 @@ test("release scripts do not roll back links after committing deployment state",
     assert.ok(finalOutput > commitMarker, `${file} must commit before final output`);
   }
 });
+
+test("the application entrypoint binds Next.js to loopback only", () => {
+  const entrypoint = fs.readFileSync("ops/bin/znt-app-start", "utf8");
+  assert.match(entrypoint, /exec "\$NPM_BIN" start -- --hostname 127\.0\.0\.1/);
+});

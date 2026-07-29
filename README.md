@@ -86,6 +86,7 @@ npm run build
 |---|---|
 | `ZNT_CONTENT_DIR` | 活动内容目录，生产为 `shared/content/current` |
 | `TOKEN_RANK_STORE_PATH` | Token Rank 持久化文件，生产必须位于 `shared/` |
+| `ZNT_PUBLIC_SITE_URL` | Token Rank 安装命令使用的公网来源；默认 `https://znt.group` |
 | `BUILD_SHA` | 当前代码版本，由部署流程设置 |
 
 日报工作站可按需配置：
