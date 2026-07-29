@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { run } from "../ops/bin/znt-token-rank-retire-duplicates.mjs";
 
 const NOW = Date.parse("2026-07-29T04:00:00.000Z");
@@ -70,6 +72,13 @@ test("duplicate retirement keeps the high scorer, retires zero-token duplicates,
   assert.equal(preview.retiredCount, 0);
   assert.deepEqual(preview.tied, []);
   assert.equal(fs.readFileSync(storePath, "utf8"), before);
+
+  const symlinkPath = path.join(directory, "current-dedupe.mjs");
+  const scriptPath = fileURLToPath(new URL("../ops/bin/znt-token-rank-retire-duplicates.mjs", import.meta.url));
+  fs.symlinkSync(scriptPath, symlinkPath);
+  const linkedPreview = spawnSync(process.execPath, [symlinkPath, "--store", storePath], { encoding: "utf8" });
+  assert.equal(linkedPreview.status, 0, linkedPreview.stderr);
+  assert.deepEqual(JSON.parse(linkedPreview.stdout).retirements.map((item) => item.userId), [2, 3, 4]);
 
   const applied = run(storePath, true, NOW);
   assert.equal(applied.retiredCount, 3);
