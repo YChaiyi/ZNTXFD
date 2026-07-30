@@ -115,4 +115,13 @@ if git grep -nE 'vercel (build|deploy)|npx vercel|rsync[^\n]*--delete[^\n]*/var/
   exit 1
 fi
 
+# The daily workstation is allowed to publish content only through the
+# zntcontent forced-command protocol. Any direct production administration in
+# scripts/ can restore the legacy whole-tree deployment path and overwrite the
+# active code release.
+if git grep -nE 'ubuntu@|sudo([[:space:]]|$)|systemctl([[:space:]]|$)|znt-(rollback|code-deploy|content-promote)|/var/www/znt\.group/current' -- scripts ':!scripts/check_source_only.sh'; then
+  echo "Legacy workstation deployment capability detected" >&2
+  exit 1
+fi
+
 echo "source-only policy passed"

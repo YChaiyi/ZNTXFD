@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -124,4 +124,49 @@ test("release scripts do not roll back links after committing deployment state",
 test("the application entrypoint binds Next.js to loopback only", () => {
   const entrypoint = fs.readFileSync("ops/bin/znt-app-start", "utf8");
   assert.match(entrypoint, /exec "\$NPM_BIN" start -- --hostname 127\.0\.0\.1/);
+});
+
+test("Next image optimization does not write cache files into immutable releases", () => {
+  const config = fs.readFileSync("next.config.ts", "utf8");
+  assert.match(config, /maximumDiskCacheSize:\s*0/);
+});
+
+test("source-only policy blocks legacy workstation production controls", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "znt-source-policy-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+  fs.copyFileSync("scripts/check_source_only.sh", path.join(root, "scripts", "check_source_only.sh"));
+  fs.writeFileSync(path.join(root, "package.json"), "{}\n");
+  fs.writeFileSync(path.join(root, "scripts", "publisher.sh"), "#!/bin/bash\necho content only\n");
+  fs.chmodSync(path.join(root, "scripts", "publisher.sh"), 0o755);
+
+  execFileSync("git", ["init", "--quiet"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "ZNT policy test"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "policy@example.test"], { cwd: root });
+  execFileSync("git", ["add", "."], { cwd: root });
+  execFileSync("git", ["commit", "--quiet", "-m", "fixture"], { cwd: root });
+
+  const allowed = spawnSync("bash", ["scripts/check_source_only.sh", "--tracked-only"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(allowed.status, 0, allowed.stderr);
+
+  for (const forbidden of [
+    "ubuntu@43.128.59.181",
+    "sudo rsync -a source /var/www/znt.group/current",
+    "systemctl restart znt-group.service",
+    "znt-rollback",
+    "znt-code-deploy deadbeef",
+    "znt-content-promote version 2026-07-30 30",
+  ]) {
+    fs.writeFileSync(path.join(root, "scripts", "publisher.sh"), `#!/bin/bash\n${forbidden}\n`);
+    const rejected = spawnSync("bash", ["scripts/check_source_only.sh", "--tracked-only"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.notEqual(rejected.status, 0, forbidden);
+    assert.match(rejected.stderr, /Legacy workstation deployment capability detected/);
+  }
 });
