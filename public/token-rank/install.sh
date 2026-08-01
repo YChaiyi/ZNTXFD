@@ -102,7 +102,7 @@ restore_client_and_config() {
 
 if ! "$NODE_BIN" "$CLIENT" --token "$TOKEN" --endpoint "$ENDPOINT" --rebuild-history; then
   restore_client_and_config
-  echo "首次同步失败，未安装后台任务。请确认你复制的是页面生成的真实专属命令。" >&2
+  echo "首次同步失败，未安装后台任务。具体原因见上一条客户端错误。" >&2
   exit 1
 fi
 
