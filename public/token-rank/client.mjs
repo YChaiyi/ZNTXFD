@@ -7,11 +7,12 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const CONFIG_DIR = process.env.ZNT_TOKENRANK_HOME || path.join(os.homedir(), ".znt-tokenrank");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
-const CODEX_CACHE_PATH = path.join(CONFIG_DIR, "codex-usage-cache-v6.json.gz");
-const CODEX_CACHE_VERSION = 6;
+const CODEX_CACHE_PATH = path.join(CONFIG_DIR, "codex-usage-cache-v7.json.gz");
+const LEGACY_CODEX_CACHE_PATH = path.join(CONFIG_DIR, "codex-usage-cache-v6.json.gz");
+const CODEX_CACHE_VERSION = 7;
 const HISTORY_DAYS = 35;
 const MAX_FILE_SIZE = 8 * 1024 * 1024;
 const MAX_FILES_PER_TOOL = 320;
@@ -363,8 +364,11 @@ export async function parseCodexFile(item) {
   let timestampErrors = 0;
   let unsupportedUsageEvents = 0;
   let countersReset = false;
+  let cumulativeNonMonotonic = false;
   let rawTokenEvents = 0;
   let terminalTotalSignature = "";
+  let cumulativeBaselineLost = false;
+  const seenUsageSignatures = new Set();
   const events = [];
 
   for await (const line of lines) {
@@ -440,11 +444,14 @@ export async function parseCodexFile(item) {
 
     const total = codexCounters(info?.total_token_usage);
     const last = codexCounters(info?.last_token_usage);
-    if (!total) {
-      if (last) unsupportedUsageEvents += 1;
-      continue;
-    }
-    if (total.input === null || total.output === null) {
+    const totalIsUsable = total && total.input !== null && total.output !== null;
+    const lastIsUsable = last
+      && last.input !== null
+      && last.output !== null
+      && [last.input, last.cacheRead, last.cacheWrite, last.output].some(
+        (counter) => counterValue(counter) > 0,
+      );
+    if (!lastIsUsable && !totalIsUsable) {
       counterErrors += 1;
       continue;
     }
@@ -452,21 +459,63 @@ export async function parseCodexFile(item) {
       timestampErrors += 1;
       continue;
     }
+    const afterForkBoundary = !parentId
+      || subagentBoundarySeen
+      || (
+        uuidForkBoundaryMs !== null
+        && timestampMs >= uuidForkBoundaryMs
+      );
 
-    if (previousTotal) {
+    let totalDecreased = false;
+    if (previousTotal && totalIsUsable) {
       for (const key of ["input", "cacheRead", "cacheWrite", "output"]) {
         if (
           previousTotal[key] !== null
           && total[key] !== null
           && counterValue(total[key]) < counterValue(previousTotal[key])
         ) {
-          countersReset = true;
+          totalDecreased = true;
         }
       }
     }
-    const delta = cumulativeDelta(previousTotal, total);
-    previousTotal = total;
-    terminalTotalSignature = JSON.stringify(countersSignature(info.total_token_usage));
+    if (totalDecreased) {
+      cumulativeNonMonotonic = true;
+      if (!lastIsUsable) countersReset = true;
+    }
+
+    const scopedSignature = JSON.stringify([
+      currentModel,
+      afterForkBoundary,
+      totalIsUsable ? signature : timestampMs,
+      signature,
+    ]);
+    if (lastIsUsable && seenUsageSignatures.has(scopedSignature)) {
+      if (totalIsUsable) {
+        previousTotal = total;
+        terminalTotalSignature = JSON.stringify(countersSignature(info.total_token_usage));
+        cumulativeBaselineLost = false;
+      }
+      continue;
+    }
+    if (lastIsUsable) seenUsageSignatures.add(scopedSignature);
+
+    if (!lastIsUsable && (cumulativeBaselineLost || cumulativeNonMonotonic)) {
+      unsupportedUsageEvents += 1;
+      previousTotal = total;
+      terminalTotalSignature = JSON.stringify(countersSignature(info.total_token_usage));
+      cumulativeBaselineLost = false;
+      continue;
+    }
+    const delta = lastIsUsable ? last : cumulativeDelta(previousTotal, total);
+    if (totalIsUsable) {
+      previousTotal = total;
+      terminalTotalSignature = JSON.stringify(countersSignature(info.total_token_usage));
+      cumulativeBaselineLost = false;
+    } else {
+      previousTotal = null;
+      terminalTotalSignature = "";
+      cumulativeBaselineLost = true;
+    }
 
     const normalized = normalizeCodexDelta(delta);
     events.push({
@@ -476,13 +525,7 @@ export async function parseCodexFile(item) {
       timestampMs: Number.isFinite(timestampMs) ? timestampMs : null,
       date: Number.isFinite(timestampMs) ? todayFromTime(timestampMs) : "",
       model: currentModel,
-      afterForkBoundary: !parentId
-        || subagentBoundarySeen
-        || (
-          uuidForkBoundaryMs !== null
-          && Number.isFinite(timestampMs)
-          && timestampMs >= uuidForkBoundaryMs
-        ),
+      afterForkBoundary,
     });
   }
 
@@ -513,6 +556,7 @@ export async function parseCodexFile(item) {
     timestampErrors,
     unsupportedUsageEvents,
     countersReset,
+    cumulativeNonMonotonic,
     rawTokenEvents,
     terminalTotalSignature,
     maxTimestampMs,
@@ -564,6 +608,7 @@ export function aggregateCodexFiles(
     if (
       !parent
       || parsed.countersReset
+      || parsed.cumulativeNonMonotonic
       || parsed.counterErrors > 0
       || parsed.timestampErrors > 0
       || parsed.unsupportedUsageEvents > 0
@@ -634,15 +679,40 @@ export function aggregateCodexFiles(
   return [...map.values()];
 }
 
-function readCodexCache() {
+function readCodexCacheFile(file) {
   try {
-    const value = JSON.parse(gunzipSync(fs.readFileSync(CODEX_CACHE_PATH)).toString("utf8"));
-    return value?.version === CODEX_CACHE_VERSION && value.files && typeof value.files === "object"
-      ? value.files
-      : {};
+    return JSON.parse(gunzipSync(fs.readFileSync(file)).toString("utf8"));
   } catch {
-    return {};
+    return null;
   }
+}
+
+function readCodexCache() {
+  const current = readCodexCacheFile(CODEX_CACHE_PATH);
+  if (
+    current?.version === CODEX_CACHE_VERSION
+    && current.files
+    && typeof current.files === "object"
+  ) {
+    return current.files;
+  }
+
+  const legacy = readCodexCacheFile(LEGACY_CODEX_CACHE_PATH);
+  if (legacy?.version !== 6 || !legacy.files || typeof legacy.files !== "object") return {};
+
+  // Reuse only v6 entries whose diagnostics prove that the old cumulative
+  // parser did not lose information. Everything else is reparsed with v7.
+  return Object.fromEntries(
+    Object.entries(legacy.files).filter(([, cached]) => {
+      const parsed = cached?.parsed;
+      return parsed
+        && parsed.countersReset === false
+        && (parsed.parseErrors || 0) === 0
+        && (parsed.counterErrors || 0) === 0
+        && (parsed.timestampErrors || 0) === 0
+        && (parsed.unsupportedUsageEvents || 0) === 0;
+    }),
+  );
 }
 
 function writeCodexCache(files) {
@@ -993,12 +1063,9 @@ async function main() {
   const parsedCutoff = Date.parse(cutoffArg || "");
   const cutoffMs = cutoffArg && Number.isFinite(parsedCutoff) ? parsedCutoff : Date.now();
   const codex = await collectCodex(cutoffMs);
-  const rebuildHistory = process.argv.includes("--rebuild-history");
+  const rebuildHistoryRequested = process.argv.includes("--rebuild-history");
   const codexComplete = codexCollectionComplete(codex.diagnostics);
   const codexSourceFound = codexSourceAvailable(codex.diagnostics);
-  if (rebuildHistory && codexSourceFound && !codexComplete) {
-    throw new Error(`Codex 历史扫描不完整，未覆盖旧统计：${JSON.stringify(codex.diagnostics)}`);
-  }
   const records = codexSourceFound ? [...codex.records] : [];
 
   for (const source of TOOL_SOURCES) {
@@ -1037,6 +1104,16 @@ async function main() {
   }
 
   const config = prepareConfig();
+  const rebuildHistory = rebuildHistoryRequested || config.pendingCodexHistoryRebuild === true;
+  if (rebuildHistory) config.pendingCodexHistoryRebuild = true;
+  if (codexSourceFound && !codexComplete) {
+    config.pendingCodexHistoryRebuild = true;
+    console.warn(
+      `Codex 历史扫描不完整，本次保留线上旧统计；客户端会自动重试完整重建：${JSON.stringify(codex.diagnostics)}`,
+    );
+  } else if (rebuildHistory && codexSourceFound && codexComplete) {
+    delete config.pendingCodexHistoryRebuild;
+  }
   const observedThrough = new Date(cutoffMs).toISOString();
   const collector = codexSourceFound && codexComplete
     ? { tool: "codex", observedThrough }

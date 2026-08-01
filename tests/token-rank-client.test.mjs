@@ -90,6 +90,31 @@ function tokenCount(timestamp, input, cached, output, reasoning = 0) {
   };
 }
 
+function tokenCountWithLast(timestamp, total, last) {
+  const value = tokenCount(
+    timestamp,
+    total.input,
+    total.cached,
+    total.output,
+    total.reasoning || 0,
+  );
+  value.payload.info.last_token_usage = {
+    input_tokens: last.input,
+    cached_input_tokens: last.cached,
+    cache_write_input_tokens: 0,
+    output_tokens: last.output,
+    reasoning_output_tokens: last.reasoning || 0,
+    total_tokens: last.input + last.output,
+  };
+  return value;
+}
+
+function tokenCountWithLastOnly(timestamp, last) {
+  const value = tokenCountWithLast(timestamp, last, last);
+  delete value.payload.info.total_token_usage;
+  return value;
+}
+
 function diagnostics(selectedFiles) {
   return {
     selectedFiles,
@@ -133,6 +158,121 @@ test("Codex cumulative snapshots count deltas and split cached input once", asyn
     },
     { input: 60, output: 15, cached: 100, total: 175 },
   );
+});
+
+test("Codex per-request usage survives interleaved cumulative counters without double counting", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const id = "00000000-0000-4000-8000-000000000002";
+  const second = tokenCountWithLast(
+    "2026-07-22T00:02:00.000Z",
+    { input: 80, cached: 40, output: 8 },
+    { input: 20, cached: 10, output: 2 },
+  );
+  const sameUsageInAnotherModel = structuredClone(second);
+  sameUsageInAnotherModel.timestamp = "2026-07-22T00:02:30.000Z";
+  const item = writeRollout(dir, id, [
+    sessionMeta(id, "2026-07-22T00:00:00.000Z"),
+    turnContext("2026-07-22T00:00:01.000Z"),
+    tokenCountWithLast(
+      "2026-07-22T00:01:00.000Z",
+      { input: 100, cached: 60, output: 10 },
+      { input: 100, cached: 60, output: 10 },
+    ),
+    second,
+    structuredClone(second),
+    turnContext("2026-07-22T00:02:15.000Z", "gpt-5.6-terra"),
+    sameUsageInAnotherModel,
+    tokenCountWithLast(
+      "2026-07-22T00:03:00.000Z",
+      { input: 120, cached: 70, output: 12 },
+      { input: 40, cached: 20, output: 4 },
+    ),
+  ]);
+
+  const parsed = await parseCodexFile(item);
+  const result = aggregateCodexFiles(
+    [parsed],
+    new Map([[id, parsed]]),
+    "2026-07-22",
+    "2026-07-22",
+    diagnostics(1),
+  );
+
+  assert.equal(parsed.countersReset, false);
+  assert.equal(parsed.events.length, 4, "only an identical event in the same model is deduplicated");
+  assert.equal(result.reduce((sum, record) => sum + record.totalTokens, 0), 198);
+});
+
+test("Codex accepts complete per-request usage when cumulative counters are absent", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const id = "00000000-0000-4000-8000-000000000003";
+  const item = writeRollout(dir, id, [
+    sessionMeta(id, "2026-07-22T00:00:00.000Z"),
+    turnContext("2026-07-22T00:00:01.000Z"),
+    tokenCountWithLastOnly(
+      "2026-07-22T00:01:00.000Z",
+      { input: 50, cached: 30, output: 5 },
+    ),
+  ]);
+
+  const parsed = await parseCodexFile(item);
+  const result = aggregateCodexFiles(
+    [parsed],
+    new Map([[id, parsed]]),
+    "2026-07-22",
+    "2026-07-22",
+    diagnostics(1),
+  );
+
+  assert.equal(parsed.counterErrors, 0);
+  assert.equal(parsed.unsupportedUsageEvents, 0);
+  assert.equal(result.reduce((sum, record) => sum + record.totalTokens, 0), 55);
+});
+
+test("a repeated total-only signature cannot hide a cumulative counter reset", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const id = "00000000-0000-4000-8000-000000000004";
+  const parsed = await parseCodexFile(writeRollout(dir, id, [
+    sessionMeta(id, "2026-07-22T00:00:00.000Z"),
+    turnContext("2026-07-22T00:00:01.000Z"),
+    tokenCount("2026-07-22T00:01:00.000Z", 100, 60, 10),
+    tokenCount("2026-07-22T00:02:00.000Z", 200, 120, 20),
+    tokenCount("2026-07-22T00:03:00.000Z", 100, 60, 10),
+    tokenCount("2026-07-22T00:04:00.000Z", 210, 125, 21),
+  ]));
+
+  assert.equal(parsed.countersReset, true);
+  assert.equal(parsed.cumulativeNonMonotonic, true);
+  assert.ok(parsed.unsupportedUsageEvents > 0);
+});
+
+test("a cumulative-only event after interleaved totals is deferred instead of guessed", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const id = "00000000-0000-4000-8000-000000000005";
+  const parsed = await parseCodexFile(writeRollout(dir, id, [
+    sessionMeta(id, "2026-07-22T00:00:00.000Z"),
+    turnContext("2026-07-22T00:00:01.000Z"),
+    tokenCountWithLast(
+      "2026-07-22T00:01:00.000Z",
+      { input: 100, cached: 60, output: 10 },
+      { input: 100, cached: 60, output: 10 },
+    ),
+    tokenCountWithLast(
+      "2026-07-22T00:02:00.000Z",
+      { input: 50, cached: 30, output: 5 },
+      { input: 10, cached: 5, output: 1 },
+    ),
+    tokenCount("2026-07-22T00:03:00.000Z", 120, 70, 12),
+  ]));
+
+  assert.equal(parsed.events.length, 2);
+  assert.equal(parsed.countersReset, false);
+  assert.equal(parsed.cumulativeNonMonotonic, true);
+  assert.equal(parsed.unsupportedUsageEvents, 1);
 });
 
 test("spawned Codex rollouts exclude inherited history before the child boundary", async (t) => {
@@ -235,7 +375,7 @@ test("ordinary forks count child work when the parent ended earlier", async (t) 
   assert.equal(parent.maxTimestampMs < child.rootTimestampMs, true);
   assert.equal(result.reduce((sum, record) => sum + record.totalTokens, 0), 230);
   assert.equal(diag.deferredFiles, 0);
-  assert.equal(diag.replayEventsSkipped, 3, "the zero replay snapshot is skipped with the prefix");
+  assert.equal(diag.replayEventsSkipped, 3, "the repeated zero-delta snapshot remains in the replay prefix");
 });
 
 test("ordinary forks defer when no current UUIDv7 turn boundary is present", async (t) => {
@@ -335,6 +475,89 @@ test("a boundaryless fork is proven empty only when its terminal counters equal 
   assert.equal(result.reduce((sum, record) => sum + record.totalTokens, 0), 175);
   assert.equal(diag.deferredFiles, 0);
   assert.equal(diag.replayEventsSkipped, 2);
+});
+
+test("a non-monotonic boundaryless fork cannot masquerade as an empty replay", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const parentId = "019f87b0-0000-7000-8000-000000000073";
+  const childId = "019f87c4-0b80-7000-8000-000000000074";
+  const parentUsage = tokenCountWithLast(
+    "2026-07-22T00:01:00.000Z",
+    { input: 100, cached: 60, output: 10 },
+    { input: 100, cached: 60, output: 10 },
+  );
+  const parent = await parseCodexFile(writeRollout(dir, parentId, [
+    sessionMeta(parentId, "2026-07-22T00:00:00.000Z"),
+    parentUsage,
+  ]));
+  const child = await parseCodexFile(writeRollout(dir, childId, [
+    guardianMeta(childId, "2026-07-22T01:00:00.000Z", parentId),
+    parentUsage,
+    tokenCountWithLast(
+      "2026-07-22T01:01:00.000Z",
+      { input: 50, cached: 30, output: 5 },
+      { input: 10, cached: 5, output: 1 },
+    ),
+    tokenCountWithLast(
+      "2026-07-22T01:02:00.000Z",
+      { input: 100, cached: 60, output: 10 },
+      { input: 50, cached: 30, output: 5 },
+    ),
+  ]));
+  const diag = diagnostics(2);
+  const result = aggregateCodexFiles(
+    [parent, child],
+    new Map([[parentId, parent], [childId, child]]),
+    "2026-07-22",
+    "2026-07-22",
+    diag,
+  );
+
+  assert.equal(child.countersReset, false, "last usage keeps the child events countable");
+  assert.equal(child.cumulativeNonMonotonic, true);
+  assert.equal(child.forkBoundaryMissing, true);
+  assert.equal(diag.deferredFiles, 1);
+  assert.equal(result.reduce((sum, record) => sum + record.totalTokens, 0), 110);
+});
+
+test("an identical usage signature is counted again after an explicit child boundary", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const parentId = "019f87b0-0000-7000-8000-000000000075";
+  const childId = "019f87c4-0b80-7000-8000-000000000076";
+  const usage = tokenCountWithLast(
+    "2026-07-22T00:01:00.000Z",
+    { input: 20, cached: 10, output: 2 },
+    { input: 20, cached: 10, output: 2 },
+  );
+  const repeatedAfterBoundary = structuredClone(usage);
+  repeatedAfterBoundary.timestamp = "2026-07-22T01:01:00.000Z";
+  const parent = await parseCodexFile(writeRollout(dir, parentId, [
+    sessionMeta(parentId, "2026-07-22T00:00:00.000Z"),
+    usage,
+  ]));
+  const child = await parseCodexFile(writeRollout(dir, childId, [
+    sessionMeta(childId, "2026-07-22T01:00:00.000Z", parentId),
+    usage,
+    {
+      timestamp: "2026-07-22T01:00:30.000Z",
+      type: "inter_agent_communication_metadata",
+      payload: { trigger_turn: {} },
+    },
+    repeatedAfterBoundary,
+  ]));
+  const result = aggregateCodexFiles(
+    [parent, child],
+    new Map([[parentId, parent], [childId, child]]),
+    "2026-07-22",
+    "2026-07-22",
+    diagnostics(2),
+  );
+
+  assert.equal(child.replayEventsSkipped, 1);
+  assert.equal(child.events.length, 1);
+  assert.equal(result.reduce((sum, record) => sum + record.totalTokens, 0), 44);
 });
 
 test("missing required cumulative counters make an authoritative scan incomplete", async (t) => {

@@ -75,7 +75,7 @@ function znt-tokenrank {
   & $NodePath $Client --token $Token --endpoint $Endpoint --rebuild-history
   if ($LASTEXITCODE -ne 0) {
     & $RestoreClientAndConfig
-    throw "首次同步失败，未安装后台任务。请确认你复制的是页面生成的真实专属命令。"
+    throw "首次同步失败，未安装后台任务。具体原因见上一条客户端错误。"
   }
 
   if ($NoSchedule) {

@@ -71,6 +71,41 @@ function writeCodexFixture(home, nowMs) {
   fs.writeFileSync(file, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
 }
 
+function writeIncompleteCodexFixture(home, nowMs) {
+  const id = "019f87c4-0b80-7000-8000-000000000092";
+  const dir = path.join(home, ".codex", "sessions", "2026", "07", "22");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `rollout-2026-07-22T00-00-00-${id}.jsonl`);
+  const metaTime = new Date(nowMs - 180_000).toISOString();
+  const firstTime = new Date(nowMs - 120_000).toISOString();
+  const secondTime = new Date(nowMs - 60_000).toISOString();
+  const usage = (timestamp, input, cached, output) => ({
+    timestamp,
+    type: "event_msg",
+    payload: {
+      type: "token_count",
+      info: {
+        total_token_usage: {
+          input_tokens: input,
+          cached_input_tokens: cached,
+          cache_write_input_tokens: 0,
+          output_tokens: output,
+          reasoning_output_tokens: 0,
+          total_tokens: input + output,
+        },
+      },
+    },
+  });
+  const lines = [
+    { timestamp: metaTime, type: "session_meta", payload: { id, source: "vscode" } },
+    { timestamp: firstTime, type: "turn_context", payload: { model: "gpt-5.6-sol" } },
+    usage(firstTime, 100, 60, 10),
+    usage(secondTime, 50, 30, 5),
+  ];
+  fs.writeFileSync(file, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+  return file;
+}
+
 async function readRequestJson(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
@@ -157,7 +192,7 @@ test("the real installer rebuilds legacy Codex history twice without touching ot
     endpoint,
     "--no-schedule",
   ], { env: environment, timeout: 60_000 });
-  assert.match(first.stdout, /客户端版本：0\.2\.0/);
+  assert.match(first.stdout, /客户端版本：0\.2\.1/);
   assert.equal(uploads.length, 1);
   assert.equal(uploads[0].protocolVersion, 2);
   assert.equal(uploads[0].snapshot.complete, true);
@@ -181,7 +216,7 @@ test("the real installer rebuilds legacy Codex history twice without touching ot
     endpoint,
     "--no-schedule",
   ], { env: environment, timeout: 60_000 });
-  assert.match(second.stdout, /客户端版本：0\.2\.0/);
+  assert.match(second.stdout, /客户端版本：0\.2\.1/);
   assert.equal(uploads.length, 2);
   assert.equal(uploads[1].deviceId, DEVICE_ID);
 
@@ -191,7 +226,7 @@ test("the real installer rebuilds legacy Codex history twice without touching ot
   assert.equal(own.find((record) => record.model === "gpt-5.6-sol").totalTokens, 110);
   assert.equal(JSON.parse(fs.readFileSync(path.join(installDir, "config.json"), "utf8")).deviceId, DEVICE_ID);
   assert.equal(fs.statSync(path.join(installDir, "config.json")).mode & 0o777, 0o600);
-  assert.equal(fs.statSync(path.join(installDir, "codex-usage-cache-v6.json.gz")).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(installDir, "codex-usage-cache-v7.json.gz")).mode & 0o777, 0o600);
   assert.equal(fs.existsSync(path.join(home, "Library", "LaunchAgents", "group.znt.tokenrank.plist")), false);
 });
 
@@ -268,6 +303,80 @@ test("a rejected first upload restores the previous client and configuration", a
   assert.equal(fs.readdirSync(installDir).some((name) => name.includes(".pending")), false);
 });
 
+test("an incomplete migrated history installs safely and retries the authoritative rebuild", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-install-migrated-"));
+  const home = path.join(root, "home");
+  const installDir = path.join(home, ".znt-tokenrank");
+  fs.mkdirSync(installDir, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const incompleteFile = writeIncompleteCodexFixture(home, Date.now());
+  const clientSource = fs.readFileSync(
+    path.join(process.cwd(), "public", "token-rank", "client.mjs"),
+    "utf8",
+  );
+  const uploads = [];
+  const server = http.createServer(async (request, response) => {
+    if (request.method === "GET" && request.url === "/token-rank/client.mjs") {
+      response.writeHead(200, { "content-type": "text/javascript" });
+      response.end(clientSource);
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/token-rank/upload") {
+      const body = await readRequestJson(request);
+      uploads.push(body);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: 0, accepted: body.records.length }));
+      return;
+    }
+    response.writeHead(404);
+    response.end("not found");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  const endpoint = `http://127.0.0.1:${address.port}/api/token-rank/upload`;
+  const environment = {
+    ...process.env,
+    HOME: home,
+    ZNT_TOKENRANK_HOME: installDir,
+    ZNT_TOKENRANK_NODE: process.execPath,
+  };
+
+  const first = await execFileAsync("bash", [
+    path.join(process.cwd(), "public", "token-rank", "install.sh"),
+    "--token",
+    "znt_trk_migrated_history",
+    "--endpoint",
+    endpoint,
+    "--no-schedule",
+  ], { env: environment, timeout: 60_000 });
+
+  assert.match(first.stderr, /保留线上旧统计.*自动重试完整重建/);
+  assert.match(first.stdout, /客户端版本：0\.2\.1/);
+  assert.equal(uploads.length, 1);
+  assert.equal(uploads[0].records.some((record) => record.tool === "codex"), false);
+  assert.equal(Object.hasOwn(uploads[0], "collector"), false);
+  assert.equal(Object.hasOwn(uploads[0], "snapshot"), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(installDir, "config.json"), "utf8")).pendingCodexHistoryRebuild, true);
+
+  fs.rmSync(incompleteFile);
+  writeCodexFixture(home, Date.now());
+  await execFileAsync(process.execPath, [path.join(installDir, "client.mjs")], {
+    env: environment,
+    timeout: 60_000,
+  });
+
+  assert.equal(uploads.length, 2);
+  assert.equal(uploads[1].snapshot.complete, true);
+  assert.equal(uploads[1].snapshot.tool, "codex");
+  assert.equal(Object.hasOwn(
+    JSON.parse(fs.readFileSync(path.join(installDir, "config.json"), "utf8")),
+    "pendingCodexHistoryRebuild",
+  ), false);
+});
+
 test("reinstalling without a Codex source does not clear existing Codex history", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-install-no-codex-"));
   const home = path.join(root, "home");
@@ -342,6 +451,10 @@ test("reinstalling without a Codex source does not clear existing Codex history"
   const data = JSON.parse(fs.readFileSync(storePath, "utf8"));
   const own = data.records.filter((record) => record.tokenHash === user.tokenHash);
   assert.ok(own.some((record) => record.model === "must-survive-no-source"));
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(installDir, "config.json"), "utf8")).pendingCodexHistoryRebuild,
+    true,
+  );
 });
 
 test("the installer completes scheduled setup under a UTF-8 locale", async (t) => {
@@ -409,7 +522,7 @@ test("the installer completes scheduled setup under a UTF-8 locale", async (t) =
   });
 
   assert.equal(uploadAttempts, 1);
-  assert.match(result.stdout, /配置目录：.*\.znt-tokenrank。客户端版本：0\.2\.0/);
+  assert.match(result.stdout, /配置目录：.*\.znt-tokenrank。客户端版本：0\.2\.1/);
   assert.equal(fs.existsSync(path.join(home, "Library", "LaunchAgents", "group.znt.tokenrank.plist")), true);
 });
 
