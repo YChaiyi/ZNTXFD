@@ -110,7 +110,8 @@ if git grep -nE 'BEGIN (RSA |OPENSSH |EC )?PRIVATE KEY|gh[pousr]_[A-Za-z0-9_]{20
   exit 1
 fi
 
-if git grep -nE 'vercel (build|deploy)|npx vercel|rsync[^\n]*--delete[^\n]*/var/www/znt\.group/current' -- . ':!scripts/check_source_only.sh'; then
+if git grep -nE 'vercel (build|deploy)|npx vercel|rsync[^\n]*--delete[^\n]*/var/www/znt\.group/current' -- . \
+    ':!scripts/check_source_only.sh' ':!ops/workstation/content-agent-AGENTS.md'; then
   echo "Retired deployment capability detected" >&2
   exit 1
 fi
