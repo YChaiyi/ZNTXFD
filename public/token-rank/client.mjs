@@ -7,7 +7,7 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 const CONFIG_DIR = process.env.ZNT_TOKENRANK_HOME || path.join(os.homedir(), ".znt-tokenrank");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 const CODEX_CACHE_PATH = path.join(CONFIG_DIR, "codex-usage-cache-v7.json.gz");
@@ -1021,7 +1021,7 @@ function collectTool(source) {
   return aggregate(collected, todayFromTime(Date.now()), source.tool);
 }
 
-async function upload(config, records, collector = null, snapshot = null) {
+async function upload(config, records, collector = null, snapshot = null, codexMode = null) {
   const response = await fetch(config.endpoint, {
     method: "POST",
     headers: {
@@ -1035,6 +1035,7 @@ async function upload(config, records, collector = null, snapshot = null) {
       records,
       ...(collector ? { collector } : {}),
       ...(snapshot ? { snapshot } : {}),
+      ...(codexMode ? { codexMode } : {}),
     }),
   });
 
@@ -1097,9 +1098,13 @@ async function main() {
     return;
   }
 
-  if (!codexComplete) {
+  const partialCodex = codexSourceFound && !codexComplete;
+  if (partialCodex) {
+    const targetDate = todayFromTime(cutoffMs);
     for (let index = records.length - 1; index >= 0; index -= 1) {
-      if (records[index].tool === "codex") records.splice(index, 1);
+      if (records[index].tool === "codex" && records[index].date !== targetDate) {
+        records.splice(index, 1);
+      }
     }
   }
 
@@ -1109,7 +1114,7 @@ async function main() {
   if (codexSourceFound && !codexComplete) {
     config.pendingCodexHistoryRebuild = true;
     console.warn(
-      `Codex 历史扫描不完整，本次保留线上旧统计；客户端会自动重试完整重建：${JSON.stringify(codex.diagnostics)}`,
+      `Codex 历史扫描不完整，本次仅合并今日已确认的下界统计并保留线上历史快照；客户端会自动重试完整重建：${JSON.stringify(codex.diagnostics)}`,
     );
   } else if (rebuildHistory && codexSourceFound && codexComplete) {
     delete config.pendingCodexHistoryRebuild;
@@ -1133,7 +1138,7 @@ async function main() {
   const stagedConfig = stageConfig(config);
   let result;
   try {
-    result = await upload(config, records, collector, snapshot);
+    result = await upload(config, records, collector, snapshot, partialCodex ? "partial" : null);
     stagedConfig.commit();
   } catch (error) {
     stagedConfig.discard();

@@ -192,7 +192,7 @@ test("the real installer rebuilds legacy Codex history twice without touching ot
     endpoint,
     "--no-schedule",
   ], { env: environment, timeout: 60_000 });
-  assert.match(first.stdout, /客户端版本：0\.2\.1/);
+  assert.match(first.stdout, /客户端版本：0\.2\.2/);
   assert.equal(uploads.length, 1);
   assert.equal(uploads[0].protocolVersion, 2);
   assert.equal(uploads[0].snapshot.complete, true);
@@ -216,7 +216,7 @@ test("the real installer rebuilds legacy Codex history twice without touching ot
     endpoint,
     "--no-schedule",
   ], { env: environment, timeout: 60_000 });
-  assert.match(second.stdout, /客户端版本：0\.2\.1/);
+  assert.match(second.stdout, /客户端版本：0\.2\.2/);
   assert.equal(uploads.length, 2);
   assert.equal(uploads[1].deviceId, DEVICE_ID);
 
@@ -353,10 +353,11 @@ test("an incomplete migrated history installs safely and retries the authoritati
     "--no-schedule",
   ], { env: environment, timeout: 60_000 });
 
-  assert.match(first.stderr, /保留线上旧统计.*自动重试完整重建/);
-  assert.match(first.stdout, /客户端版本：0\.2\.1/);
+  assert.match(first.stderr, /仅合并今日已确认的下界统计.*自动重试完整重建/);
+  assert.match(first.stdout, /客户端版本：0\.2\.2/);
   assert.equal(uploads.length, 1);
-  assert.equal(uploads[0].records.some((record) => record.tool === "codex"), false);
+  assert.equal(uploads[0].records.some((record) => record.tool === "codex"), true);
+  assert.equal(uploads[0].codexMode, "partial");
   assert.equal(Object.hasOwn(uploads[0], "collector"), false);
   assert.equal(Object.hasOwn(uploads[0], "snapshot"), false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(installDir, "config.json"), "utf8")).pendingCodexHistoryRebuild, true);
@@ -375,6 +376,53 @@ test("an incomplete migrated history installs safely and retries the authoritati
     JSON.parse(fs.readFileSync(path.join(installDir, "config.json"), "utf8")),
     "pendingCodexHistoryRebuild",
   ), false);
+});
+
+test("a failed authoritative retry keeps the pending rebuild marker", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-pending-retry-"));
+  const home = path.join(root, "home");
+  const installDir = path.join(home, ".znt-tokenrank");
+  fs.mkdirSync(installDir, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeCodexFixture(home, Date.now());
+
+  const server = http.createServer(async (request, response) => {
+    if (request.method === "POST" && request.url === "/api/token-rank/upload") {
+      await readRequestJson(request);
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: 500, message: "retry failed" }));
+      return;
+    }
+    response.writeHead(404);
+    response.end("not found");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.equal(typeof address, "object");
+
+  const clientPath = path.join(installDir, "client.mjs");
+  const configPath = path.join(installDir, "config.json");
+  fs.copyFileSync(path.join(process.cwd(), "public", "token-rank", "client.mjs"), clientPath);
+  fs.writeFileSync(configPath, JSON.stringify({
+    token: "znt_trk_pending_retry",
+    endpoint: `http://127.0.0.1:${address.port}/api/token-rank/upload`,
+    deviceId: DEVICE_ID,
+    pendingCodexHistoryRebuild: true,
+  }), { mode: 0o600 });
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [clientPath], {
+      env: {
+        ...process.env,
+        HOME: home,
+        ZNT_TOKENRANK_HOME: installDir,
+      },
+      timeout: 60_000,
+    }),
+    /上报失败：500/,
+  );
+  assert.equal(JSON.parse(fs.readFileSync(configPath, "utf8")).pendingCodexHistoryRebuild, true);
 });
 
 test("reinstalling without a Codex source does not clear existing Codex history", async (t) => {
@@ -522,7 +570,7 @@ test("the installer completes scheduled setup under a UTF-8 locale", async (t) =
   });
 
   assert.equal(uploadAttempts, 1);
-  assert.match(result.stdout, /配置目录：.*\.znt-tokenrank。客户端版本：0\.2\.1/);
+  assert.match(result.stdout, /配置目录：.*\.znt-tokenrank。客户端版本：0\.2\.2/);
   assert.equal(fs.existsSync(path.join(home, "Library", "LaunchAgents", "group.znt.tokenrank.plist")), true);
 });
 
