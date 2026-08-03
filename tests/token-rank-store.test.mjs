@@ -90,6 +90,16 @@ function v2Payload({
   };
 }
 
+function partialPayload({ records = [], deviceId = DEVICE_A } = {}) {
+  return {
+    protocolVersion: 2,
+    deviceId,
+    clientVersion: "0.2.2",
+    codexMode: "partial",
+    records,
+  };
+}
+
 function persisted(storePath) {
   return JSON.parse(fs.readFileSync(storePath, "utf8"));
 }
@@ -141,6 +151,84 @@ test("a v2 Codex snapshot clears zero days and preserves every ownership boundar
   assert.ok(data.records.some(
     (record) => record.tokenHash === userB.tokenHash && record.model === "other-user",
   ));
+});
+
+test("partial Codex lower bounds never reduce data and a later snapshot stays authoritative", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const { token, user } = await store.createTokenRankUser({ name: "partial-owner" });
+  const today = beijingDate();
+  const observedThrough = new Date().toISOString();
+
+  await store.appendTokenRankUsage(token, v2Payload({
+    records: [codexRecord({ date: today, model: "stable", input: 30, output: 5, cache: 65 })],
+    observedThrough,
+  }));
+  const originalCollector = persisted(storePath).collectors[0];
+
+  const firstPartial = await store.appendTokenRankUsage(token, partialPayload({
+    records: [
+      codexRecord({ date: today, model: "stable", input: 20, output: 5, cache: 55 }),
+      codexRecord({ date: today, model: "new-model", input: 10, output: 5, cache: 15 }),
+    ],
+  }));
+  assert.deepEqual(firstPartial, {
+    ok: true,
+    accepted: 2,
+    replaced: 1,
+    merged: 2,
+    preserved: 0,
+  });
+
+  let records = persisted(storePath).records.filter((record) => record.tokenHash === user.tokenHash);
+  assert.equal(records.find((record) => record.model === "stable").totalTokens, 80);
+  assert.equal(records.find((record) => record.model === "new-model").totalTokens, 30);
+  assert.deepEqual(persisted(storePath).collectors[0], originalCollector);
+
+  const higherPartial = await store.appendTokenRankUsage(token, partialPayload({
+    records: [codexRecord({ date: today, model: "stable", input: 50, output: 10, cache: 80 })],
+  }));
+  assert.deepEqual(higherPartial, {
+    ok: true,
+    accepted: 1,
+    replaced: 2,
+    merged: 1,
+    preserved: 0,
+  });
+  records = persisted(storePath).records.filter((record) => record.tokenHash === user.tokenHash);
+  assert.equal(records.find((record) => record.model === "stable").totalTokens, 140);
+  assert.equal(records.some((record) => record.model === "new-model"), false);
+
+  const conflictingPartial = await store.appendTokenRankUsage(token, partialPayload({
+    records: [codexRecord({ date: today, model: "renamed", input: 10, output: 5, cache: 145 })],
+  }));
+  assert.deepEqual(conflictingPartial, {
+    ok: true,
+    accepted: 1,
+    replaced: 0,
+    merged: 0,
+    preserved: 1,
+  });
+  records = persisted(storePath).records.filter((record) => record.tokenHash === user.tokenHash);
+  assert.equal(records.find((record) => record.model === "stable").totalTokens, 140);
+  assert.equal(records.some((record) => record.model === "renamed"), false);
+
+  const board = await store.getTokenRankLeaderboard({ range: "today" });
+  const entry = board.entries.find((candidate) => candidate.userId === user.userId);
+  assert.equal(entry.score, 140);
+  assert.equal(entry.norm, 60);
+  const profile = await store.getTokenRankPublicProfile(user.userId);
+  assert.equal(profile.todayTotals.total, 140);
+  assert.equal(profile.todayTotals.norm, 60);
+  assert.ok(profile.todayTotals.lastSync);
+
+  await store.appendTokenRankUsage(token, v2Payload({
+    records: [codexRecord({ date: today, model: "stable", input: 25, output: 5, cache: 60 })],
+    snapshotId: "snapshot-after-partial",
+    observedThrough: new Date(Date.parse(observedThrough) + 1000).toISOString(),
+  }));
+  records = persisted(storePath).records.filter((record) => record.tokenHash === user.tokenHash);
+  assert.equal(records.find((record) => record.model === "stable").totalTokens, 90);
+  assert.equal(records.some((record) => record.model === "new-model"), false);
 });
 
 test("an empty authoritative snapshot clears stale Codex and records a stable real sync time", async (t) => {
@@ -197,6 +285,13 @@ test("v2 validation rejects the entire package without changing persisted bytes"
     { ...base, records: [{ ...goodRecord, totalTokens: goodRecord.totalTokens + 1 }] },
     { ...base, records: [{ ...goodRecord, date: addDays(base.snapshot.startDate, -1) }] },
     { ...base, records: tooMany },
+    { ...partialPayload({ records: [goodRecord] }), protocolVersion: 1 },
+    { ...partialPayload({ records: [goodRecord] }), codexMode: "unknown" },
+    { ...partialPayload({ records: [goodRecord] }), collector: base.collector },
+    { ...partialPayload({ records: [goodRecord] }), snapshot: base.snapshot },
+    {
+      ...partialPayload({ records: [codexRecord({ date: addDays(today, -2) })] }),
+    },
   ];
 
   for (const payload of invalidPayloads) {

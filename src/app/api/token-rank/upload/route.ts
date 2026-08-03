@@ -19,6 +19,8 @@ export async function POST(request: NextRequest) {
     status: 0,
     accepted: result.accepted,
     replaced: result.replaced,
+    ...(result.merged !== undefined ? { merged: result.merged } : {}),
+    ...(result.preserved !== undefined ? { preserved: result.preserved } : {}),
     idempotent: result.idempotent ?? false,
     receivedAt: new Date().toISOString(),
   });
