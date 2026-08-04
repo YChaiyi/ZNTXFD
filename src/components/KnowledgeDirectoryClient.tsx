@@ -2,18 +2,23 @@
 
 import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
+import { KnowledgeCard } from "@/components/KnowledgeCard";
+import { RatingBadge } from "@/components/RatingBadge";
 import { TagBadge } from "@/components/TagBadge";
 
 type DirectoryItem = {
   slug: string;
   title: string;
   claim: string;
+  summary: string;
   category: string;
   rating?: string;
   tags: string[];
   tools: string[];
   contributors: string[];
   sourceCount: number;
+  evidenceCount: number;
+  citationCount: number;
   sourceDate: string;
   updatedAt: string;
 };
@@ -134,9 +139,7 @@ function FeaturedQuestion({ item, index }: { item: DirectoryItem; index: number 
     >
       <div className="flex items-center justify-between gap-3">
         <span className="mono-num text-xs font-black text-accent">0{index + 1}</span>
-        <span className="rounded-md border border-[#f7c95c]/35 bg-[#f7c95c]/12 px-2 py-1 text-[11px] font-black text-[#f7c95c]">
-          AAA
-        </span>
+        <RatingBadge rating={item.rating} />
       </div>
       <h3 className="mt-4 line-clamp-2 text-base font-black leading-6 text-foreground group-hover:text-accent-light">
         {item.title}
@@ -232,50 +235,7 @@ function HubDetail({
 }
 
 function KnowledgeRow({ item }: { item: DirectoryItem }) {
-  return (
-    <Link
-      href={`/knowledge/${item.slug}`}
-      className="grid gap-4 rounded-[14px] border border-white/[0.07] bg-[#141419] p-4 transition-all hover:-translate-y-0.5 hover:border-accent/45 md:grid-cols-[96px_minmax(0,1fr)_180px]"
-    >
-      <div>
-        <span className="mono-num inline-flex min-w-14 justify-center rounded-md border border-[#f7c95c]/35 bg-[#f7c95c]/12 px-2.5 py-1.5 text-sm font-black text-[#f7c95c]">
-          AAA
-        </span>
-        <time className="mono-num mt-3 block text-xs text-foreground-muted">
-          {formatDate(item.updatedAt || item.sourceDate)}
-        </time>
-      </div>
-
-      <div className="min-w-0">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="rounded-md bg-white/[0.045] px-2 py-1 text-xs font-semibold text-foreground-muted">
-            {item.category}
-          </span>
-          {item.tools.slice(0, 2).map((tool) => (
-            <TagBadge key={tool}>{tool}</TagBadge>
-          ))}
-        </div>
-        <h3 className="line-clamp-2 text-base font-black leading-7 text-foreground">
-          {item.title}
-        </h3>
-        <p className="mt-2 line-clamp-2 text-sm leading-6 text-foreground-muted">
-          {item.claim}
-        </p>
-      </div>
-
-      <div className="flex flex-row gap-3 border-t border-white/[0.06] pt-3 text-xs text-foreground-muted md:flex-col md:border-l md:border-t-0 md:pl-4 md:pt-0">
-        <span>
-          来源 <b className="mono-num text-success">{item.sourceCount}</b>
-        </span>
-        <span>
-          贡献者 <b className="mono-num text-foreground">{item.contributors.length}</b>
-        </span>
-        <span>
-          标签 <b className="mono-num text-accent">{item.tags.length}</b>
-        </span>
-      </div>
-    </Link>
-  );
+  return <KnowledgeCard item={item} />;
 }
 
 export function KnowledgeDirectoryClient({

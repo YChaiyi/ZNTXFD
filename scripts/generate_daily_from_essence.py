@@ -358,11 +358,25 @@ def build_title(topics):
 def build_stats(reports):
     total_messages = 0
     active_members = 0
+    groups = []
     for report in reports:
         stats = report.get("stats") or {}
-        total_messages += int(stats.get("message_count") or 0)
-        active_members += int(stats.get("active_users") or 0)
-    return {"total_messages": total_messages, "active_members": active_members}
+        message_count = int(stats.get("message_count") or 0)
+        active_users = int(stats.get("active_users") or 0)
+        total_messages += message_count
+        active_members += active_users
+        groups.append(
+            {
+                "name": str(report.get("group_name") or ""),
+                "message_count": message_count,
+                "active_users": active_users,
+            }
+        )
+    return {
+        "total_messages": total_messages,
+        "active_members": active_members,
+        "groups": groups,
+    }
 
 
 def main():
