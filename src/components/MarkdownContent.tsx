@@ -50,7 +50,15 @@ function renderInline(text: string): ReactNode[] {
 }
 
 export function MarkdownContent({ content }: MarkdownContentProps) {
-  const blocks = content.trim().split(/\n{2,}/);
+  // A heading that shares a block with surrounding lines would either be
+  // rendered as plain text (heading after text) or swallow its body (the
+  // heading branch below only renders the first line). Give every heading
+  // its own block first.
+  const blocks = content
+    .trim()
+    .replace(/([^\n])\n(#{1,6}\s)/g, "$1\n\n$2")
+    .replace(/^(#{1,6}\s[^\n]*)\n(?!\n)/gm, "$1\n\n")
+    .split(/\n{2,}/);
 
   return (
     <div className="space-y-4 text-sm leading-7 text-foreground md:text-base md:leading-8">
