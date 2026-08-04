@@ -270,7 +270,8 @@ export default async function DailyPage({ params }: DailyPageProps) {
             {images.map((img) => (
               <div
                 key={img.key}
-                className={`glass-card card-hover overflow-hidden hover:border-white/[0.14] ${
+                id={`digest-${img.key}`}
+                className={`glass-card card-hover scroll-mt-24 overflow-hidden hover:border-white/[0.14] ${
                   img.exists ? "" : "border-danger/20 bg-danger/[0.04]"
                 }`}
               >
