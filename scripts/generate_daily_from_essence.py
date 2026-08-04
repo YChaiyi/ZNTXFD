@@ -283,12 +283,19 @@ def action_items_for_topic(topic_tags, group_actions):
 
 
 def build_content(description, items):
-    lines = [description, "", "### 关键沉淀"]
+    lines = [description]
+
+    item_lines = []
     for item in items[:7]:
         title = normalize_text(item.get("title"))
         summary = normalize_text(item.get("summary"))
         if title and summary:
-            lines.append(f"- **{title}**：{summary}")
+            item_lines.append(f"- **{title}**：{summary}")
+    # A heading with nothing under it reads as a broken page; sections
+    # only exist when they have content.
+    if item_lines:
+        lines.extend(["", "### 关键沉淀"])
+        lines.extend(item_lines)
 
     quotes = collect_quotes(items)
     if quotes:
@@ -358,11 +365,25 @@ def build_title(topics):
 def build_stats(reports):
     total_messages = 0
     active_members = 0
+    groups = []
     for report in reports:
         stats = report.get("stats") or {}
-        total_messages += int(stats.get("message_count") or 0)
-        active_members += int(stats.get("active_users") or 0)
-    return {"total_messages": total_messages, "active_members": active_members}
+        message_count = int(stats.get("message_count") or 0)
+        active_users = int(stats.get("active_users") or 0)
+        total_messages += message_count
+        active_members += active_users
+        groups.append(
+            {
+                "name": str(report.get("group_name") or ""),
+                "message_count": message_count,
+                "active_users": active_users,
+            }
+        )
+    return {
+        "total_messages": total_messages,
+        "active_members": active_members,
+        "groups": groups,
+    }
 
 
 def main():
