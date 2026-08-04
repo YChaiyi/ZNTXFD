@@ -44,7 +44,7 @@ export default function DailyListPage() {
           {cards.map((card) => {
             const status = getDigestStatus(card.date);
             const digestLabel = status.available
-              ? `${status.readyCount}/${status.totalCount}`
+              ? `${status.readyCount}/${status.totalCount} 群已归档`
               : "未纳入";
             return (
               <Link
@@ -90,7 +90,7 @@ export default function DailyListPage() {
                     <span className="mono-num block font-semibold text-accent">
                       {card.topic_count}
                     </span>
-                    <span className="text-foreground-disabled">弹药</span>
+                    <span className="text-foreground-disabled">话题</span>
                   </span>
                   <span>
                     <span className="mono-num block font-semibold text-accent">

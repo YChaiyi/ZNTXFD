@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 
 const tabs = [
   {
@@ -45,7 +46,7 @@ const tabs = [
     ),
   },
   {
-    label: "知识",
+    label: "知识库",
     href: "/knowledge",
     icon: (
       <svg
@@ -62,49 +63,6 @@ const tabs = [
         <path d="M4 6.5v14" />
         <path d="M8 8h8" />
         <path d="M8 12h7" />
-      </svg>
-    ),
-  },
-  {
-    label: "先锋智能体论坛",
-    displayLabel: "论坛",
-    href: "https://bbs.znt.group/",
-    external: true,
-    icon: (
-      <svg
-        aria-hidden="true"
-        viewBox="0 0 24 24"
-        className="h-5 w-5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M17 10a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v7l3-2h7a4 4 0 0 0 4-4Z" />
-        <path d="M15 14h2l4 3V9a4 4 0 0 0-4-4h-1" />
-      </svg>
-    ),
-  },
-  {
-    label: "Token",
-    href: "/token-rank",
-    icon: (
-      <svg
-        aria-hidden="true"
-        viewBox="0 0 24 24"
-        className="h-5 w-5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M4 7h16" />
-        <path d="M4 12h10" />
-        <path d="M4 17h7" />
-        <path d="M18 11v8" />
-        <path d="m15 16 3 3 3-3" />
       </svg>
     ),
   },
@@ -128,25 +86,6 @@ const tabs = [
       </svg>
     ),
   },
-  {
-    label: "搜索",
-    href: "/search",
-    icon: (
-      <svg
-        aria-hidden="true"
-        viewBox="0 0 24 24"
-        className="h-5 w-5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="m21 21-4.35-4.35" />
-        <circle cx="11" cy="11" r="7" />
-      </svg>
-    ),
-  },
 ];
 
 function isActivePath(pathname: string, href: string) {
@@ -163,48 +102,97 @@ function isActivePath(pathname: string, href: string) {
 
 export function BottomNav() {
   const pathname = usePathname();
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  const moreLinks = [
+    { label: "搜索", href: "/search" },
+    { label: "Token榜", href: "/token-rank" },
+    { label: "先锋智能体论坛", href: "https://bbs.znt.group/", external: true },
+  ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 grid h-[72px] grid-cols-7 border-t border-white/[0.07] bg-background/90 px-1 backdrop-blur-[20px] md:hidden">
-      {tabs.map((tab) => {
-        const active = isActivePath(pathname, tab.href);
-        const className = `flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold transition-colors ${
-          active
-            ? "bg-accent/15 text-accent"
-            : "text-foreground-muted hover:text-foreground"
-        }`;
-        const label = <span className="max-w-full truncate">{tab.displayLabel ?? tab.label}</span>;
-
-        if (tab.external) {
-          return (
+    <>
+      <nav
+        id="bottom-more-panel"
+        aria-label="更多入口"
+        data-more-panel
+        className={`fixed bottom-[72px] left-0 right-0 z-50 border-t border-white/[0.07] bg-background/95 px-4 py-2 backdrop-blur-[20px] md:hidden ${
+          moreOpen ? "" : "hidden"
+        }`}
+      >
+        {moreLinks.map((link) =>
+          link.external ? (
             <a
-              key={tab.href}
-              href={tab.href}
+              key={link.href}
+              href={link.href}
               target="_blank"
               rel="noreferrer"
+              onClick={() => setMoreOpen(false)}
+              className="touch-target flex min-h-11 items-center text-sm font-semibold text-foreground-muted hover:text-foreground"
+            >
+              {link.label} ↗
+            </a>
+          ) : (
+            <Link
+              key={link.href}
+              href={link.href}
+              onClick={() => setMoreOpen(false)}
+              className="touch-target flex min-h-11 items-center text-sm font-semibold text-foreground-muted hover:text-foreground"
+            >
+              {link.label}
+            </Link>
+          ),
+        )}
+      </nav>
+
+      <nav className="fixed bottom-0 left-0 right-0 z-50 grid h-[72px] grid-cols-5 border-t border-white/[0.07] bg-background/90 px-1 backdrop-blur-[20px] md:hidden">
+        {tabs.map((tab) => {
+          const active = isActivePath(pathname, tab.href);
+          const className = `flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold transition-colors ${
+            active
+              ? "bg-accent/15 text-accent"
+              : "text-foreground-muted hover:text-foreground"
+          }`;
+
+          return (
+            <Link
+              key={tab.href}
+              href={tab.href}
               aria-label={tab.label}
               title={tab.label}
               className={className}
             >
               {tab.icon}
-              {label}
-            </a>
+              <span className="max-w-full truncate">{tab.label}</span>
+            </Link>
           );
-        }
-
-        return (
-          <Link
-            key={tab.href}
-            href={tab.href}
-            aria-label={tab.label}
-            title={tab.label}
-            className={className}
+        })}
+        <button
+          type="button"
+          aria-expanded={moreOpen}
+          aria-controls="bottom-more-panel"
+          onClick={() => setMoreOpen((open) => !open)}
+          className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold transition-colors ${
+            moreOpen ? "bg-accent/15 text-accent" : "text-foreground-muted hover:text-foreground"
+          }`}
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            className="h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           >
-            {tab.icon}
-            {label}
-          </Link>
-        );
-      })}
-    </nav>
+            <circle cx="5" cy="12" r="1.6" />
+            <circle cx="12" cy="12" r="1.6" />
+            <circle cx="19" cy="12" r="1.6" />
+          </svg>
+          <span className="max-w-full truncate">更多</span>
+        </button>
+      </nav>
+    </>
   );
 }

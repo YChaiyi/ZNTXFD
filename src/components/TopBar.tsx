@@ -103,45 +103,6 @@ function QuestionIcon() {
   );
 }
 
-function ForumIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className="h-5 w-5"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M17 10a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v7l3-2h7a4 4 0 0 0 4-4Z" />
-      <path d="M15 14h2l4 3V9a4 4 0 0 0-4-4h-1" />
-    </svg>
-  );
-}
-
-function TokenIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className="h-5 w-5"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M4 7h16" />
-      <path d="M4 12h10" />
-      <path d="M4 17h7" />
-      <path d="M18 11v8" />
-      <path d="m15 16 3 3 3-3" />
-    </svg>
-  );
-}
-
 function SearchIcon({ className = "h-5 w-5" }: { className?: string }) {
   return (
     <svg
@@ -164,14 +125,6 @@ const navItems = [
   { label: "首页", href: "/", icon: <HomeIcon /> },
   { label: "期刊", href: "/daily", icon: <DailyIcon /> },
   { label: "知识库", href: "/knowledge", icon: <KnowledgeIcon /> },
-  {
-    label: "先锋智能体论坛",
-    shortLabel: "论坛",
-    href: "https://bbs.znt.group/",
-    icon: <ForumIcon />,
-    external: true,
-  },
-  { label: "Token榜", href: "/token-rank", icon: <TokenIcon /> },
   { label: "提问", href: "/questions", icon: <QuestionIcon /> },
   { label: "搜索", href: "/search", icon: <SearchIcon /> },
 ];
@@ -214,32 +167,6 @@ export function TopBar() {
                 ? "text-foreground shadow-[inset_0_-2px_0_#ff9f3a]"
                 : "text-foreground-muted hover:bg-white/[0.04] hover:text-foreground"
             }`;
-            const label = (
-              <>
-                <span className={item.shortLabel ? "hidden xl:inline" : undefined}>
-                  {item.label}
-                </span>
-                {item.shortLabel ? <span className="xl:hidden">{item.shortLabel}</span> : null}
-              </>
-            );
-
-            if (item.external) {
-              return (
-                <a
-                  key={item.href}
-                  href={item.href}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label={item.label}
-                  title={item.label}
-                  className={className}
-                >
-                  {item.icon}
-                  {label}
-                </a>
-              );
-            }
-
             return (
               <Link
                 key={item.href}
@@ -247,7 +174,7 @@ export function TopBar() {
                 className={className}
               >
                 {item.icon}
-                {label}
+                {item.label}
               </Link>
             );
           })}
@@ -259,12 +186,18 @@ export function TopBar() {
             className="hidden h-11 w-56 items-center gap-2 rounded-full border border-white/[0.10] bg-[#191920] px-4 text-[15px] font-medium text-foreground-muted transition-colors hover:border-accent/40 hover:text-foreground lg:flex"
           >
             <SearchIcon className="h-5 w-5 shrink-0" />
-            <span className="truncate">搜索弹药...</span>
+            <span className="truncate">搜索工具、观点、案例…</span>
           </Link>
-          <span className="hidden items-center gap-2 text-sm font-medium text-foreground-muted sm:inline-flex">
+          <span className="hidden items-center gap-2 text-sm font-medium text-foreground-muted xl:inline-flex">
             <span className="pulse-dot" aria-hidden="true" />
             持续沉淀
           </span>
+          <a
+            href="#join"
+            className="touch-target inline-flex h-10 shrink-0 items-center rounded-lg bg-gradient-to-b from-accent-light to-accent px-4 text-sm font-black text-background transition-transform hover:-translate-y-0.5"
+          >
+            加入社群
+          </a>
         </div>
       </div>
     </header>
