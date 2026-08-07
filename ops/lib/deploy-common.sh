@@ -8,6 +8,9 @@ ZNT_NODE_BIN="${ZNT_NODE_BIN:-/usr/local/bin/node}"
 ZNT_NPM_BIN="${ZNT_NPM_BIN:-/usr/local/bin/npm}"
 ZNT_NODE_MAJOR="${ZNT_NODE_MAJOR:-24}"
 ZNT_GIT_BIN="${ZNT_GIT_BIN:-/usr/bin/git}"
+ZNT_CHATTR_BIN="${ZNT_CHATTR_BIN:-/usr/bin/chattr}"
+ZNT_LSATTR_BIN="${ZNT_LSATTR_BIN:-/usr/bin/lsattr}"
+ZNT_CODE_MANIFEST_TOOL="${ZNT_CODE_MANIFEST_TOOL:-/usr/local/lib/znt/code-release-manifest.mjs}"
 ZNT_SOURCE_REPOSITORY_URL="https://github.com/YChaiyi/ZNTXFD.git"
 ZNT_SOURCE_MAX_FILES="${ZNT_SOURCE_MAX_FILES:-10000}"
 ZNT_SOURCE_MAX_BYTES="${ZNT_SOURCE_MAX_BYTES:-67108864}"
@@ -28,6 +31,86 @@ znt_require_node_runtime() {
   actual_major="$("$ZNT_NODE_BIN" -p 'process.versions.node.split(".")[0]')"
   [[ "$actual_major" = "$ZNT_NODE_MAJOR" ]] \
     || znt_fail "Node.js major must be $ZNT_NODE_MAJOR, found $actual_major at $ZNT_NODE_BIN"
+}
+
+znt_require_release_integrity_tools() {
+  [[ -x "$ZNT_CHATTR_BIN" ]] || znt_fail "chattr is missing: $ZNT_CHATTR_BIN"
+  [[ -x "$ZNT_LSATTR_BIN" ]] || znt_fail "lsattr is missing: $ZNT_LSATTR_BIN"
+  [[ -f "$ZNT_CODE_MANIFEST_TOOL" && ! -L "$ZNT_CODE_MANIFEST_TOOL" ]] \
+    || znt_fail "code release manifest tool is missing: $ZNT_CODE_MANIFEST_TOOL"
+}
+
+znt_code_release_is_immutable() {
+  local release="$1"
+
+  find -P "$release" -xdev \( -type d -o -type f \) -exec "$ZNT_LSATTR_BIN" -d -- {} + 2>/dev/null \
+    | awk '$1 !~ /i/ { invalid=1 } END { exit(invalid ? 1 : 0) }'
+}
+
+znt_code_release_permissions_valid() {
+  local release="$1"
+  local invalid_owner invalid_mode
+
+  invalid_owner="$(find -P "$release" -xdev \( ! -user root -o ! -group zntapp \) -print -quit)" \
+    || return 1
+  [[ -z "$invalid_owner" ]] || return 1
+  invalid_mode="$(find -P "$release" -xdev \( -type d -o -type f \) -perm /022 -print -quit)" \
+    || return 1
+  [[ -z "$invalid_mode" ]]
+}
+
+znt_code_release_valid() {
+  local release="$1"
+  local expected_sha="$2"
+  local owner mode manifest owner_manifest mode_manifest
+
+  [[ -d "$release" && ! -L "$release" ]] || return 1
+  owner="$(stat -c '%U:%G' "$release" 2>/dev/null)" || return 1
+  mode="$(stat -c '%a' "$release" 2>/dev/null)" || return 1
+  [[ "$owner" = "root:zntapp" ]] || return 1
+  (( (8#$mode & 0022) == 0 )) || return 1
+  znt_code_release_permissions_valid "$release" || return 1
+  manifest="$release/.znt-code-release.json"
+  [[ -f "$manifest" && ! -L "$manifest" ]] || return 1
+  owner_manifest="$(stat -c '%U:%G' "$manifest" 2>/dev/null)" || return 1
+  mode_manifest="$(stat -c '%a' "$manifest" 2>/dev/null)" || return 1
+  [[ "$owner_manifest" = "root:zntapp" && "$mode_manifest" = "640" ]] || return 1
+  "$ZNT_NODE_BIN" "$ZNT_CODE_MANIFEST_TOOL" verify "$release" "$expected_sha" >/dev/null 2>&1 \
+    || return 1
+  znt_code_release_is_immutable "$release"
+}
+
+znt_seal_code_release() {
+  local release="$1"
+  local expected_sha="$2"
+  local manifest="$release/.znt-code-release.json"
+  local status=0
+
+  znt_require_release_integrity_tools
+  [[ -d "$release" && ! -L "$release" ]] || znt_fail "cannot seal an invalid code release"
+  [[ "$(stat -c '%U:%G' "$release")" = "root:zntapp" ]] \
+    || znt_fail "code release must be owned by root:zntapp before sealing"
+  "$ZNT_NODE_BIN" "$ZNT_CODE_MANIFEST_TOOL" create "$release" "$expected_sha" \
+    || znt_fail "could not create the code release manifest"
+  chown root:zntapp "$manifest" || status=$?
+  (( status != 0 )) || chmod 0640 "$manifest" || status=$?
+  (( status != 0 )) \
+    || find -P "$release" -xdev \( -type d -o -type f \) -exec "$ZNT_CHATTR_BIN" +i -- {} + \
+    || status=$?
+  (( status != 0 )) || znt_code_release_valid "$release" "$expected_sha" || status=$?
+  if (( status != 0 )); then
+    znt_unseal_code_release "$release" || true
+    rm -f -- "$manifest" || true
+    znt_fail "sealed code release failed integrity verification; the partial seal was removed"
+  fi
+}
+
+znt_unseal_code_release() {
+  local release="$1"
+
+  [[ -d "$release" && ! -L "$release" ]] || return 0
+  [[ -x "$ZNT_CHATTR_BIN" ]] || return 1
+  find -P "$release" -xdev \( -type d -o -type f \) -exec "$ZNT_CHATTR_BIN" -i -- {} +
 }
 
 znt_require_free_kib() {
@@ -432,21 +515,43 @@ znt_validate_pair_paths() {
   [[ "$(znt_realpath "$content_path")" = "$(znt_realpath "$root/shared/content/releases/$content_version")" ]] || znt_fail "content path is outside its release"
 }
 
+znt_health_matches() {
+  local expected_sha="$1"
+  local expected_content_version="${2:-}"
+  local response
+
+  response="$(curl -fsS --max-time 5 -H 'X-ZNT-Local-Health: 1' http://127.0.0.1:3017/api/health)" \
+    || return 1
+  "$ZNT_NODE_BIN" -e '
+    try {
+      const [body, expectedSha, expectedContentVersion] = process.argv.slice(1);
+      const health = JSON.parse(body);
+      const valid = health.ready === true
+        && health.buildSha === expectedSha
+        && health.tokenRankUploadProtocol === 2
+        && health.tokenRankPartialUpload === true
+        && (!expectedContentVersion || health.contentVersion === expectedContentVersion);
+      process.exit(valid ? 0 : 1);
+    } catch {
+      process.exit(1);
+    }
+  ' "$response" "$expected_sha" "$expected_content_version"
+}
+
 znt_start_and_check() {
   local service="$1"
   local expected_sha="$2"
+  local root="${3:-${ZNT_ROOT:-/var/www/znt.group}}"
+  local expected_content_version="${4:-}"
   local attempts="${ZNT_HEALTH_ATTEMPTS:-8}"
-  local attempt
+  local attempt release
 
+  release="$(znt_realpath "$root/current")"
+  znt_code_release_valid "$release" "$expected_sha" \
+    || return 1
   systemctl start "$service"
   for attempt in $(seq 1 "$attempts"); do
-    if curl -fsS --max-time 5 -H 'X-ZNT-Local-Health: 1' http://127.0.0.1:3017/api/health \
-      | grep -q "\"buildSha\":\"$expected_sha\""; then
-      if curl -fsS --max-time 5 -H 'X-ZNT-Local-Health: 1' http://127.0.0.1:3017/api/health \
-        | grep -q '"ready":true'; then
-        return 0
-      fi
-    fi
+    znt_health_matches "$expected_sha" "$expected_content_version" && return 0
     sleep 1
   done
   return 1
@@ -454,28 +559,14 @@ znt_start_and_check() {
 
 znt_content_smoke() {
   local expected_version="$1"
+  local expected_sha="$2"
   local attempts="${ZNT_CONTENT_SMOKE_ATTEMPTS:-5}"
   local node_bin="$ZNT_NODE_BIN"
   local attempt
 
   [[ -x "$node_bin" ]] || return 1
   for attempt in $(seq 1 "$attempts"); do
-    if curl -fsS --max-time 5 -H 'X-ZNT-Local-Health: 1' http://127.0.0.1:3017/api/health \
-      | "$node_bin" -e '
-        let body = "";
-        process.stdin.setEncoding("utf8");
-        process.stdin.on("data", (chunk) => { body += chunk; });
-        process.stdin.on("end", () => {
-          try {
-            const health = JSON.parse(body);
-            process.exit(health.ready === true && health.contentVersion === process.argv[1] ? 0 : 1);
-          } catch {
-            process.exit(1);
-          }
-        });
-      ' "$expected_version"; then
-      return 0
-    fi
+    znt_health_matches "$expected_sha" "$expected_version" && return 0
     sleep 1
   done
   return 1
@@ -487,6 +578,7 @@ znt_prune_releases() {
   local rollback_path="$3"
   local keep="$4"
   local marker_root="${5:-}"
+  local kind="${6:-content}"
   local directory
   local -a candidates=()
 
@@ -498,6 +590,12 @@ znt_prune_releases() {
     [[ -n "$rollback_path" && "$(znt_realpath "$directory")" = "$(znt_realpath "$rollback_path")" ]] && continue
     [[ -f "$directory/.migration-snapshot" ]] && continue
     [[ -n "$marker_root" && -f "$marker_root/$(basename "$directory")" ]] && continue
+    if [[ "$kind" = "code" ]]; then
+      znt_unseal_code_release "$directory" || {
+        echo "znt-deploy: cannot unseal old code release: $directory" >&2
+        continue
+      }
+    fi
     rm -rf -- "$directory"
   done
 }

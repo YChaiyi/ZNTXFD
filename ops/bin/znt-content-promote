@@ -110,12 +110,15 @@ release="$RELEASES/$version"
 
 pair="$(znt_current_pair "$ROOT")"
 IFS=$'\t' read -r previous_code_sha previous_code previous_content_version previous_content <<< "$pair"
+znt_code_release_valid "$previous_code" "$previous_code_sha" \
+  || znt_fail "active code release failed integrity verification; refusing content promotion"
 mv "$candidate" "$release"
 candidate=""
 new_release="$release"
 znt_switch_link "$release" "$CURRENT"
 switched=1
-znt_content_smoke "$version" || znt_fail "new content did not become ready; previous content was restored"
+znt_content_smoke "$version" "$previous_code_sha" \
+  || znt_fail "new content or active code protocol did not become ready; previous content was restored"
 
 znt_write_state "$STATE" "$previous_code_sha" "$previous_code" "$version" "$release" \
   "$previous_code_sha" "$previous_code" "$previous_content_version" "$previous_content"

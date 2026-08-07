@@ -7,7 +7,7 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 
-const VERSION = "0.2.2";
+const VERSION = "0.2.3";
 const CONFIG_DIR = process.env.ZNT_TOKENRANK_HOME || path.join(os.homedir(), ".znt-tokenrank");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 const CODEX_CACHE_PATH = path.join(CONFIG_DIR, "codex-usage-cache-v7.json.gz");
@@ -45,6 +45,41 @@ const TOOL_SOURCES = [
   { tool: "kiro", dirs: ["~/.kiro"] },
   { tool: "reasonix", dirs: ["~/.reasonix"] },
 ];
+
+function beijingTimestamp(nowMs = Date.now()) {
+  return new Date(nowMs + 8 * 60 * 60 * 1000).toISOString().replace("Z", "+08:00");
+}
+
+function redactSecrets(value, secrets = []) {
+  let safe = String(value ?? "").replace(/znt_trk_[A-Za-z0-9_-]+/g, "[REDACTED]");
+  for (const secret of secrets) {
+    if (typeof secret === "string" && secret) safe = safe.split(secret).join("[REDACTED]");
+  }
+  safe = safe.replace(
+    new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g"),
+    "",
+  );
+  return [...safe].map((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 32 || (code >= 127 && code <= 159) ? " " : character;
+  }).join("").replace(/\s+/g, " ").trim();
+}
+
+function logMessage(method, message) {
+  console[method](`[${beijingTimestamp()}] [znt-tokenrank ${VERSION}] ${redactSecrets(message)}`);
+}
+
+function logInfo(message) {
+  logMessage("log", message);
+}
+
+function logWarning(message) {
+  logMessage("warn", message);
+}
+
+function logError(message) {
+  logMessage("error", message);
+}
 
 function expandHome(value) {
   if (value === "~") return os.homedir();
@@ -1040,7 +1075,27 @@ async function upload(config, records, collector = null, snapshot = null, codexM
   });
 
   const bodyText = await response.text();
-  if (!response.ok) throw new Error(`上报失败：${response.status} ${bodyText}`);
+  if (!response.ok) {
+    let serverMessage = bodyText;
+    try {
+      const parsed = JSON.parse(bodyText);
+      if (typeof parsed?.message === "string") serverMessage = parsed.message;
+    } catch {
+      // Keep the plain-text response for diagnostics.
+    }
+    const safeServerMessage = redactSecrets(serverMessage, [config.token]).slice(0, 500);
+    const protocolMismatch = response.status === 400 && (
+      safeServerMessage.includes("v2 Codex records 必须带 collector")
+      || /protocolVersion|codexMode|partial Codex/i.test(safeServerMessage)
+    );
+    if (protocolMismatch) {
+      throw new Error(
+        `服务端与客户端协议不兼容：客户端 ${VERSION} 需要 Token Rank v2 partial 协议，`
+        + `但服务端返回 400（${safeServerMessage}）。请联系站点管理员恢复匹配的服务端版本；本次未更新同步状态。`,
+      );
+    }
+    throw new Error(`上报失败：${response.status} ${safeServerMessage}`);
+  }
 
   let body;
   try {
@@ -1048,10 +1103,20 @@ async function upload(config, records, collector = null, snapshot = null, codexM
   } catch {
     throw new Error("上报失败：服务端返回了无法识别的响应");
   }
-  if (body?.status !== 0 || body?.accepted !== records.length) {
-    throw new Error(`上报失败：服务端仅接受 ${body?.accepted ?? 0}/${records.length} 条记录`);
+  if (body?.status !== 0 || !Number.isSafeInteger(body?.accepted)) {
+    throw new Error("上报失败：服务端返回了无效的确认结果");
   }
-  return body;
+  if (body.accepted !== records.length) {
+    throw new Error(`上报失败：服务端仅接受 ${body.accepted}/${records.length} 条记录`);
+  }
+  return {
+    status: body.status,
+    accepted: body.accepted,
+    ...(typeof body.replaced === "number" ? { replaced: body.replaced } : {}),
+    ...(typeof body.merged === "number" ? { merged: body.merged } : {}),
+    ...(typeof body.preserved === "number" ? { preserved: body.preserved } : {}),
+    ...(typeof body.idempotent === "boolean" ? { idempotent: body.idempotent } : {}),
+  };
 }
 
 async function main() {
@@ -1113,7 +1178,7 @@ async function main() {
   if (rebuildHistory) config.pendingCodexHistoryRebuild = true;
   if (codexSourceFound && !codexComplete) {
     config.pendingCodexHistoryRebuild = true;
-    console.warn(
+    logWarning(
       `Codex 历史扫描不完整，本次仅合并今日已确认的下界统计并保留线上历史快照；客户端会自动重试完整重建：${JSON.stringify(codex.diagnostics)}`,
     );
   } else if (rebuildHistory && codexSourceFound && codexComplete) {
@@ -1144,9 +1209,9 @@ async function main() {
     stagedConfig.discard();
     throw error;
   }
-  console.log(`znt-tokenrank synced ${records.length} records`);
-  console.log(`codex diagnostics ${JSON.stringify(codex.diagnostics)}`);
-  console.log(result);
+  logInfo(`znt-tokenrank synced ${records.length} records`);
+  logInfo(`codex diagnostics ${JSON.stringify(codex.diagnostics)}`);
+  logInfo(`server response ${JSON.stringify(result)}`);
 }
 
 function canonicalFilePath(value) {
@@ -1161,7 +1226,7 @@ const isMain = process.argv[1]
   && canonicalFilePath(process.argv[1]) === canonicalFilePath(fileURLToPath(import.meta.url));
 if (isMain) {
   main().catch((error) => {
-    console.error(error.message);
+    logError(error.message);
     process.exitCode = 1;
   });
 }

@@ -5,17 +5,28 @@ LIB_DIR="${ZNT_LIB_DIR:-/usr/local/lib/znt}"
 # shellcheck source=/usr/local/lib/znt/deploy-common.sh
 source "$LIB_DIR/deploy-common.sh"
 
-SHA="${1:-}"
+RECOVER_UNSEALED=0
+if [[ "${1:-}" = "--recover-unsealed" && $# -eq 2 ]]; then
+  RECOVER_UNSEALED=1
+  SHA="$2"
+elif [[ $# -eq 1 ]]; then
+  SHA="$1"
+else
+  SHA=""
+fi
 ROOT="${ZNT_ROOT:-/var/www/znt.group}"
 BUILD_ROOT="$ROOT/builds"
 BUILD_ISOLATION="$BUILD_ROOT/.isolation"
 RELEASES="$ROOT/releases"
 CURRENT="$ROOT/current"
 CONTENT_CURRENT="$ROOT/shared/content/current"
+CONTENT_RELEASES="$ROOT/shared/content/releases"
 STATE="$ROOT/shared/deploy-state.json"
 SERVICE="${ZNT_SERVICE:-znt-group.service}"
 KEEP="${ZNT_CODE_KEEP:-3}"
 VALIDATOR="$LIB_DIR/validate-content-bundle.mjs"
+MANIFEST_TOOL="$ZNT_CODE_MANIFEST_TOOL"
+CONTENT_MANIFEST_BUILDER="$LIB_DIR/build-content-manifest.mjs"
 NPM_BIN="$ZNT_NPM_BIN"
 NODE_BIN="$ZNT_NODE_BIN"
 
@@ -29,6 +40,12 @@ previous_sha=""
 previous_code=""
 previous_content_version=""
 previous_content=""
+recovery_quarantine=""
+recovery_content_candidate=""
+recovery_content_version=""
+new_content_release=""
+activation_content_version=""
+activation_content=""
 
 assert_root_owned_file() {
   local path="$1"
@@ -64,12 +81,87 @@ assert_source_tree() {
   znt_assert_source_tree_budget "$candidate"
 }
 
+capture_legacy_content() {
+  local legacy="$1"
+  local present=0 required source
+  local -a required_paths=(
+    data/daily
+    data/knowledge
+    data/index.json
+    data/search-index.json
+    public/digest-images
+  )
+
+  for required in "${required_paths[@]}"; do
+    [[ ! -e "$legacy/$required" ]] || present=1
+  done
+  (( present == 1 )) || return 0
+
+  for required in "${required_paths[@]}"; do
+    [[ -e "$legacy/$required" && ! -L "$legacy/$required" ]] \
+      || znt_fail "legacy release has an incomplete or linked content tree: $required"
+  done
+  for source in \
+    "$legacy/data/daily" "$legacy/data/knowledge" "$legacy/public/digest-images"; do
+    if find -P "$source" -xdev -type l -print -quit | grep -q .; then
+      znt_fail "legacy content contains a symbolic link: $source"
+    fi
+    if find -P "$source" -xdev ! -type d ! -type f -print -quit | grep -q .; then
+      znt_fail "legacy content contains an unsupported filesystem entry: $source"
+    fi
+  done
+
+  recovery_content_version="recovered-$(date -u +%Y%m%dT%H%M%SZ)-${SHA:0:12}-$$"
+  recovery_content_candidate="$(mktemp -d "$CONTENT_RELEASES/.recovery-candidate.XXXXXX")"
+  mkdir -p \
+    "$recovery_content_candidate/daily" \
+    "$recovery_content_candidate/knowledge" \
+    "$recovery_content_candidate/digest-images"
+  rsync -a --no-specials --no-devices "$legacy/data/daily/" "$recovery_content_candidate/daily/"
+  rsync -a --no-specials --no-devices "$legacy/data/knowledge/" "$recovery_content_candidate/knowledge/"
+  rsync -a --no-specials --no-devices \
+    "$legacy/public/digest-images/" "$recovery_content_candidate/digest-images/"
+  install -o root -g root -m 0640 "$legacy/data/index.json" "$recovery_content_candidate/index.json"
+  install -o root -g root -m 0640 \
+    "$legacy/data/search-index.json" "$recovery_content_candidate/search-index.json"
+  "$NODE_BIN" "$CONTENT_MANIFEST_BUILDER" \
+    "$recovery_content_candidate" "$recovery_content_version" unknown
+  chown -hR root:zntapp "$recovery_content_candidate"
+  find -P "$recovery_content_candidate" -type d -exec chmod 0750 {} +
+  find -P "$recovery_content_candidate" -type f -exec chmod 0640 {} +
+  "$NODE_BIN" "$VALIDATOR" "$recovery_content_candidate"
+}
+
+legacy_content_matches() {
+  local legacy="$1"
+  local recovered="$2"
+  local differences source target
+
+  while IFS=$'\t' read -r source target; do
+    differences="$(rsync -rcn --delete --out-format='%i %n%L' "$source/" "$target/")" \
+      || return 1
+    [[ -z "$differences" ]] || return 1
+  done <<EOF
+$legacy/data/daily	$recovered/daily
+$legacy/data/knowledge	$recovered/knowledge
+$legacy/public/digest-images	$recovered/digest-images
+EOF
+  cmp -s "$legacy/data/index.json" "$recovered/index.json" \
+    && cmp -s "$legacy/data/search-index.json" "$recovered/search-index.json"
+}
+
 restore_previous_pair() {
   systemctl stop "$SERVICE" >/dev/null 2>&1 || true
   if [[ -n "$previous_code" && -n "$previous_content" ]]; then
     znt_switch_link "$previous_code" "$CURRENT" || true
     znt_switch_link "$previous_content" "$CONTENT_CURRENT" || true
-    znt_start_and_check "$SERVICE" "$previous_sha" >/dev/null 2>&1 || true
+    if (( RECOVER_UNSEALED == 1 )); then
+      # The quarantined release is intentionally untrusted and may predate the
+      # health protocol. It is only an emergency fallback for a failed recovery.
+      systemctl start "$SERVICE" >/dev/null 2>&1 || true
+    else
+      znt_start_and_check "$SERVICE" "$previous_sha" "$ROOT" "$previous_content_version" >/dev/null 2>&1 || true
+    fi
   fi
   service_stopped=0
 }
@@ -81,16 +173,29 @@ cleanup() {
     if (( switched == 1 )); then
       restore_previous_pair
     elif (( service_stopped == 1 )) && [[ -n "$previous_sha" ]]; then
-      znt_start_and_check "$SERVICE" "$previous_sha" >/dev/null 2>&1 || true
+      if (( RECOVER_UNSEALED == 1 )); then
+        systemctl start "$SERVICE" >/dev/null 2>&1 || true
+      else
+        znt_start_and_check "$SERVICE" "$previous_sha" "$ROOT" "$previous_content_version" >/dev/null 2>&1 || true
+      fi
     fi
   fi
   znt_lock_release
   [[ -z "$candidate" || ! -e "$candidate" ]] || rm -rf -- "$candidate"
   [[ -z "$build_candidate" || ! -e "$build_candidate" ]] || rm -rf -- "$build_candidate"
   [[ -z "$fetch_workspace" || ! -e "$fetch_workspace" ]] || rm -rf -- "$fetch_workspace"
+  [[ -z "$recovery_content_candidate" || ! -e "$recovery_content_candidate" ]] \
+    || rm -rf -- "$recovery_content_candidate"
   if (( status != 0 )) && [[ -n "$new_release" && -d "$new_release" ]]; then
     if [[ "$(znt_realpath "$CURRENT" 2>/dev/null || true)" != "$(znt_realpath "$new_release")" ]]; then
+      znt_unseal_code_release "$new_release" || true
       rm -rf -- "$new_release"
+    fi
+  fi
+  if (( status != 0 )) && [[ -n "$new_content_release" && -d "$new_content_release" ]]; then
+    if [[ "$(znt_realpath "$CONTENT_CURRENT" 2>/dev/null || true)" \
+        != "$(znt_realpath "$new_content_release")" ]]; then
+      rm -rf -- "$new_content_release"
     fi
   fi
   exit "$status"
@@ -99,10 +204,14 @@ trap cleanup EXIT
 
 znt_require_root
 znt_require_node_runtime
-[[ $# -eq 1 ]] || znt_fail "usage: znt-code-deploy <40-character-main-sha>"
+znt_require_release_integrity_tools
+[[ -n "$SHA" ]] \
+  || znt_fail "usage: znt-code-deploy [--recover-unsealed] <40-character-main-sha>"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || znt_fail "invalid Git SHA"
 [[ "$KEEP" =~ ^[0-9]+$ ]] || znt_fail "invalid code retention count"
 assert_root_owned_file "$VALIDATOR"
+assert_root_owned_file "$MANIFEST_TOOL"
+assert_root_owned_file "$CONTENT_MANIFEST_BUILDER"
 
 install -d -o zntdeploy -g zntdeploy -m 0730 "$BUILD_ROOT"
 install -d -o root -g root -m 0711 "$BUILD_ISOLATION"
@@ -118,15 +227,78 @@ znt_assert_public_main "$ROOT" "$fetch_workspace" "$SHA"
 rm -rf -- "$fetch_workspace/.znt-build-home"
 pair="$(znt_current_pair "$ROOT")"
 IFS=$'\t' read -r previous_sha previous_code previous_content_version previous_content <<< "$pair"
+activation_content_version="$previous_content_version"
+activation_content="$previous_content"
 release="$RELEASES/$SHA"
 if [[ "$previous_sha" = "$SHA" && "$(znt_realpath "$previous_code")" = "$(znt_realpath "$release")" ]]; then
+  (( RECOVER_UNSEALED == 0 )) \
+    || znt_fail "recovery requires a new main SHA so the polluted release remains quarantined"
+  if znt_code_release_valid "$release" "$SHA"; then
+    if znt_health_matches "$SHA" "$previous_content_version"; then
+      znt_lock_release
+      rm -rf -- "$fetch_workspace"
+      fetch_workspace=""
+      echo "code sha=$SHA is already active, sealed, and healthy with content=$previous_content_version"
+      exit 0
+    fi
+    service_stopped=1
+    systemctl stop "$SERVICE"
+    if znt_start_and_check "$SERVICE" "$SHA" "$ROOT" "$previous_content_version"; then
+      service_stopped=0
+      znt_lock_release
+      rm -rf -- "$fetch_workspace"
+      fetch_workspace=""
+      echo "restarted sealed code sha=$SHA with content=$previous_content_version"
+      exit 0
+    fi
+    znt_fail "sealed active release failed its restart health check"
+  fi
+  [[ ! -e "$release/.znt-code-release.json" ]] \
+    || znt_fail "active release integrity failed; refusing to trust or overwrite the existing SHA"
+  znt_health_matches "$SHA" "$previous_content_version" \
+    || znt_fail "unsealed active release does not expose the expected SHA and Token Rank protocol"
+  znt_clone_verified_public_main "$ROOT" "$fetch_workspace" "$SHA"
+  "$NODE_BIN" "$MANIFEST_TOOL" match-source "$release" "$fetch_workspace/source"
+  znt_code_release_permissions_valid "$release" \
+    || znt_fail "unsealed active release has invalid ownership or permissions"
+  znt_seal_code_release "$release" "$SHA"
+  if ! "$NODE_BIN" "$MANIFEST_TOOL" match-source "$release" "$fetch_workspace/source"; then
+    znt_unseal_code_release "$release" || true
+    rm -f -- "$release/.znt-code-release.json" || true
+    znt_fail "active release changed during sealing; the seal was removed"
+  fi
+  service_stopped=1
+  systemctl stop "$SERVICE"
+  if ! znt_start_and_check "$SERVICE" "$SHA" "$ROOT" "$previous_content_version"; then
+    systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+    znt_unseal_code_release "$release" || true
+    rm -f -- "$release/.znt-code-release.json" || true
+    systemctl start "$SERVICE" >/dev/null 2>&1 || true
+    service_stopped=0
+    znt_fail "sealed active release failed its restart health check; the seal was removed"
+  fi
+  service_stopped=0
   znt_lock_release
   rm -rf -- "$fetch_workspace"
   fetch_workspace=""
-  echo "code sha=$SHA is already active with content=$previous_content_version"
+  echo "adopted and sealed code sha=$SHA content=$previous_content_version"
   exit 0
 fi
+znt_validate_pair_paths "$ROOT" "$previous_sha" "$previous_code" \
+  "$previous_content_version" "$previous_content"
+if (( RECOVER_UNSEALED == 1 )); then
+  znt_code_release_valid "$previous_code" "$previous_sha" \
+    && znt_fail "active release is already sealed; use the normal deployment path"
+else
+  znt_code_release_valid "$previous_code" "$previous_sha" \
+    || znt_fail "active code release is not sealed; use an explicit recovery or repair it before deploying another SHA"
+  znt_health_matches "$previous_sha" "$previous_content_version" \
+    || znt_fail "active code/content pair is not healthy; repair it before deploying another SHA"
+fi
 "$NODE_BIN" "$VALIDATOR" "$previous_content"
+if (( RECOVER_UNSEALED == 1 )); then
+  capture_legacy_content "$previous_code"
+fi
 
 znt_clone_verified_public_main "$ROOT" "$fetch_workspace" "$SHA"
 build_candidate="$fetch_workspace/source"
@@ -182,25 +354,66 @@ mkdir -p "$RELEASES"
 mv "$candidate" "$release"
 candidate=""
 new_release="$release"
+znt_seal_code_release "$release" "$SHA"
+
+if [[ -n "$recovery_content_candidate" ]]; then
+  activation_content="$CONTENT_RELEASES/$recovery_content_version"
+  [[ ! -e "$activation_content" ]] || znt_fail "recovered content version already exists"
+  mv -- "$recovery_content_candidate" "$activation_content"
+  recovery_content_candidate=""
+  new_content_release="$activation_content"
+  activation_content_version="$recovery_content_version"
+fi
 
 systemctl stop "$SERVICE"
 service_stopped=1
+if [[ -n "$recovery_content_version" ]]; then
+  legacy_content_matches "$previous_code" "$activation_content" \
+    || znt_fail "legacy content changed during the recovery build; no pointer was switched, retry recovery"
+fi
+if (( RECOVER_UNSEALED == 1 )); then
+  quarantine_parent="$RELEASES/.quarantine/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  install -d -o root -g zntapp -m 0750 "$RELEASES/.quarantine" "$quarantine_parent"
+  recovery_quarantine="$quarantine_parent/$previous_sha"
+  znt_unseal_code_release "$previous_code" \
+    || znt_fail "could not remove immutable bits from the legacy release before quarantine"
+  mv -- "$previous_code" "$recovery_quarantine"
+  previous_code="$recovery_quarantine"
+  # From this point cleanup must restore the quarantined target even if the
+  # atomic link switch itself fails.
+  switched=1
+fi
 znt_switch_link "$release" "$CURRENT"
 switched=1
-if ! znt_start_and_check "$SERVICE" "$SHA"; then
+znt_switch_link "$activation_content" "$CONTENT_CURRENT"
+switched=1
+if ! znt_start_and_check "$SERVICE" "$SHA" "$ROOT" "$activation_content_version"; then
   znt_fail "candidate health check failed; previous pair was restored"
 fi
 service_stopped=0
 
-znt_write_state "$STATE" "$SHA" "$release" "$previous_content_version" "$previous_content" \
-  "$previous_sha" "$previous_code" "$previous_content_version" "$previous_content"
+if (( RECOVER_UNSEALED == 1 )); then
+  # A polluted legacy tree is retained for incident recovery, but it must
+  # never become a normal rollback target.
+  znt_write_state "$STATE" "$SHA" "$release" "$activation_content_version" "$activation_content"
+else
+  znt_write_state "$STATE" "$SHA" "$release" "$activation_content_version" "$activation_content" \
+    "$previous_sha" "$previous_code" "$previous_content_version" "$previous_content"
+fi
 # The links and state file now describe the same committed pair. A later
 # broken stdout pipe must not make the EXIT trap roll back only the links.
 switched=0
 new_release=""
+new_content_release=""
 
-if ! znt_prune_releases "$RELEASES" "$CURRENT" "$previous_code" "$KEEP" "$RELEASES/.protected"; then
+rollback_code="$previous_code"
+(( RECOVER_UNSEALED == 0 )) || rollback_code=""
+if ! znt_prune_releases "$RELEASES" "$CURRENT" "$rollback_code" "$KEEP" "$RELEASES/.protected" code; then
   echo "znt-code-deploy: warning: code release retention cleanup failed" >&2
 fi
 znt_lock_release
-echo "deployed code sha=$SHA content=$previous_content_version"
+if (( RECOVER_UNSEALED == 1 )); then
+  echo "recovered code sha=$SHA content=$activation_content_version quarantined=$recovery_quarantine"
+else
+  echo "deployed code sha=$SHA content=$activation_content_version"
+fi

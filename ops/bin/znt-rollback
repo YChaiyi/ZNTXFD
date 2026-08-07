@@ -10,6 +10,7 @@ STATE="$ROOT/shared/deploy-state.json"
 CURRENT="$ROOT/current"
 CONTENT_CURRENT="$ROOT/shared/content/current"
 SERVICE="${ZNT_SERVICE:-znt-group.service}"
+VALIDATOR="$LIB_DIR/validate-content-bundle.mjs"
 
 switched=0
 service_stopped=0
@@ -23,7 +24,7 @@ restore_before_pair() {
   if [[ -n "$before_code" && -n "$before_content" ]]; then
     znt_switch_link "$before_code" "$CURRENT" || true
     znt_switch_link "$before_content" "$CONTENT_CURRENT" || true
-    znt_start_and_check "$SERVICE" "$before_sha" >/dev/null 2>&1 || true
+    znt_start_and_check "$SERVICE" "$before_sha" "$ROOT" "$before_content_version" >/dev/null 2>&1 || true
   fi
   service_stopped=0
 }
@@ -35,7 +36,7 @@ cleanup() {
     if (( switched == 1 )); then
       restore_before_pair
     elif (( service_stopped == 1 )) && [[ -n "$before_sha" ]]; then
-      znt_start_and_check "$SERVICE" "$before_sha" >/dev/null 2>&1 || true
+      znt_start_and_check "$SERVICE" "$before_sha" "$ROOT" "$before_content_version" >/dev/null 2>&1 || true
     fi
   fi
   znt_lock_release
@@ -44,8 +45,12 @@ cleanup() {
 trap cleanup EXIT
 
 znt_require_root
+znt_require_node_runtime
+znt_require_release_integrity_tools
 [[ $# -eq 0 ]] || znt_fail "usage: znt-rollback"
 [[ -f "$STATE" ]] || znt_fail "deployment state is missing"
+[[ -f "$VALIDATOR" && ! -L "$VALIDATOR" && "$(stat -c '%U:%G' "$VALIDATOR")" = "root:root" ]] \
+  || znt_fail "root-owned content validator is missing"
 znt_lock_acquire "$ROOT" rollback
 
 pair="$(znt_current_pair "$ROOT")"
@@ -54,13 +59,16 @@ previous_pair="$(znt_state_previous_pair "$STATE" 2>/dev/null)" \
   || znt_fail "no complete previous deployment pair is available"
 IFS=$'\t' read -r target_sha target_code target_content_version target_content <<< "$previous_pair"
 znt_validate_pair_paths "$ROOT" "$target_sha" "$target_code" "$target_content_version" "$target_content"
+znt_code_release_valid "$target_code" "$target_sha" \
+  || znt_fail "rollback code release failed integrity verification"
+"$ZNT_NODE_BIN" "$VALIDATOR" "$target_content"
 
 systemctl stop "$SERVICE"
 service_stopped=1
 znt_switch_link "$target_code" "$CURRENT"
 znt_switch_link "$target_content" "$CONTENT_CURRENT"
 switched=1
-if ! znt_start_and_check "$SERVICE" "$target_sha"; then
+if ! znt_start_and_check "$SERVICE" "$target_sha" "$ROOT" "$target_content_version"; then
   znt_fail "rollback health check failed; current pair was restored"
 fi
 service_stopped=0

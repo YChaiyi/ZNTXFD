@@ -124,6 +124,8 @@ test("source exposes content publicly while retaining non-access safety gates", 
   assert.match(middleware, /getContentStatus/);
   assert.match(middleware, /status: 503/);
   assert.doesNotMatch(health, /isAccessConfigured|ACCESS_PASSWORD/);
+  assert.match(health, /tokenRankUploadProtocol:\s*2/);
+  assert.match(health, /tokenRankPartialUpload:\s*true/);
   assert.equal(fs.existsSync("src/app/api/auth/verify/route.ts"), false);
   assert.equal(fs.existsSync("src/lib/accessAuth.ts"), false);
   assert.equal(fs.existsSync("src/lib/safeNextPath.ts"), false);

@@ -34,6 +34,21 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Validate PowerShell installer
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path public/token-rank/install.ps1),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) { throw ($errors | Out-String) }
+          . ./public/token-rank/install.ps1
+          if ((Compare-ZntTokenRankSemVer "0.10.0" "0.2.3") -le 0) {
+            throw "PowerShell semantic-version comparison regressed"
+          }
       - name: Install and validate source-only tree
         env:
           TOKEN_RANK_STORE_PATH: ${{ runner.temp }}/token-rank-store.json
