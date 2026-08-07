@@ -100,6 +100,16 @@ function partialPayload({ records = [], deviceId = DEVICE_A } = {}) {
   };
 }
 
+function partialBackfillPayload({ records = [], deviceId = DEVICE_A } = {}) {
+  return {
+    protocolVersion: 2,
+    deviceId,
+    clientVersion: "0.2.4",
+    codexMode: "partial-backfill",
+    records,
+  };
+}
+
 function persisted(storePath) {
   return JSON.parse(fs.readFileSync(storePath, "utf8"));
 }
@@ -229,6 +239,272 @@ test("partial Codex lower bounds never reduce data and a later snapshot stays au
   records = persisted(storePath).records.filter((record) => record.tokenHash === user.tokenHash);
   assert.equal(records.find((record) => record.model === "stable").totalTokens, 90);
   assert.equal(records.some((record) => record.model === "new-model"), false);
+});
+
+test("partial backfill fills only unowned historical days across every ownership boundary", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const { token: tokenA, user: userA } = await store.createTokenRankUser({ name: "backfill-owner-a" });
+  const { token: tokenB, user: userB } = await store.createTokenRankUser({ name: "backfill-owner-b" });
+  const today = beijingDate();
+  const existingDay = addDays(today, -2);
+  const missingDay = addDays(today, -3);
+
+  await store.appendTokenRankUsage(tokenA, {
+    deviceId: DEVICE_A,
+    clientVersion: "0.1.0",
+    records: [
+      legacyRecord({ date: existingDay, model: "owned-day" }),
+      legacyRecord({ date: missingDay, tool: "claude-code", model: "same-owner-other-tool" }),
+    ],
+  });
+  await store.appendTokenRankUsage(tokenA, {
+    deviceId: DEVICE_B,
+    clientVersion: "0.1.0",
+    records: [legacyRecord({ date: missingDay, model: "same-owner-other-device" })],
+  });
+  await store.appendTokenRankUsage(tokenB, {
+    deviceId: DEVICE_A,
+    clientVersion: "0.1.0",
+    records: [legacyRecord({ date: missingDay, model: "other-owner-same-device" })],
+  });
+  await store.appendTokenRankUsage(tokenA, v2Payload({
+    records: [],
+    includeSnapshot: false,
+  }));
+
+  const before = persisted(storePath);
+  const originalCollector = structuredClone(before.collectors.find(
+    (collector) => collector.tokenHash === userA.tokenHash && collector.deviceId === DEVICE_A,
+  ));
+  const result = await store.appendTokenRankUsage(tokenA, partialBackfillPayload({
+    records: [
+      codexRecord({ date: existingDay, model: "must-not-replace" }),
+      codexRecord({ date: missingDay, model: "recovered-a" }),
+      codexRecord({ date: missingDay, model: "recovered-b", input: 12, output: 3, cache: 15 }),
+    ],
+  }));
+  assert.deepEqual(result, {
+    ok: true,
+    accepted: 3,
+    replaced: 0,
+    merged: 2,
+    preserved: 1,
+  });
+
+  const data = persisted(storePath);
+  const ownerDeviceRecords = data.records.filter((record) =>
+    record.tokenHash === userA.tokenHash && record.deviceId === DEVICE_A
+  );
+  assert.ok(ownerDeviceRecords.some((record) => record.model === "owned-day"));
+  assert.equal(ownerDeviceRecords.some((record) => record.model === "must-not-replace"), false);
+  assert.ok(ownerDeviceRecords.some((record) => record.model === "recovered-a"));
+  assert.ok(ownerDeviceRecords.some((record) => record.model === "recovered-b"));
+  assert.ok(ownerDeviceRecords.some((record) => record.model === "same-owner-other-tool"));
+  assert.ok(data.records.some(
+    (record) => record.tokenHash === userA.tokenHash
+      && record.deviceId === DEVICE_B
+      && record.model === "same-owner-other-device",
+  ));
+  assert.ok(data.records.some(
+    (record) => record.tokenHash === userB.tokenHash
+      && record.deviceId === DEVICE_A
+      && record.model === "other-owner-same-device",
+  ));
+  assert.deepEqual(data.collectors.find(
+    (collector) => collector.tokenHash === userA.tokenHash && collector.deviceId === DEVICE_A,
+  ), originalCollector);
+});
+
+test("partial backfill preserves snapshot-covered zero days without changing high water", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const { token } = await store.createTokenRankUser({ name: "backfill-zero-day" });
+  const yesterday = addDays(beijingDate(), -1);
+
+  await store.appendTokenRankUsage(token, v2Payload({
+    records: [],
+    snapshotId: "authoritative-zero-days",
+  }));
+  const before = fs.readFileSync(storePath, "utf8");
+  const result = await store.appendTokenRankUsage(token, partialBackfillPayload({
+    records: [codexRecord({ date: yesterday, model: "must-stay-zero" })],
+  }));
+  assert.deepEqual(result, {
+    ok: true,
+    accepted: 1,
+    replaced: 0,
+    merged: 0,
+    preserved: 1,
+  });
+  assert.equal(fs.readFileSync(storePath, "utf8"), before);
+});
+
+test("partial backfill retries are idempotent and a later snapshot remains authoritative", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const { token, user } = await store.createTokenRankUser({ name: "backfill-idempotent" });
+  const historicalDay = addDays(beijingDate(), -4);
+  const payload = partialBackfillPayload({
+    records: [
+      codexRecord({ date: historicalDay, model: "recovered-a" }),
+      codexRecord({ date: historicalDay, model: "recovered-b", input: 20, output: 4, cache: 16 }),
+    ],
+  });
+
+  const first = await store.appendTokenRankUsage(token, payload);
+  assert.deepEqual(first, {
+    ok: true,
+    accepted: 2,
+    replaced: 0,
+    merged: 2,
+    preserved: 0,
+  });
+  const afterFirst = fs.readFileSync(storePath, "utf8");
+
+  const retry = await store.appendTokenRankUsage(token, payload);
+  assert.deepEqual(retry, {
+    ok: true,
+    accepted: 2,
+    replaced: 0,
+    merged: 0,
+    preserved: 2,
+  });
+  assert.equal(fs.readFileSync(storePath, "utf8"), afterFirst);
+
+  const higher = await store.appendTokenRankUsage(token, partialBackfillPayload({
+    records: [
+      codexRecord({ date: historicalDay, model: "recovered-higher", input: 60, output: 10, cache: 90 }),
+    ],
+  }));
+  assert.deepEqual(higher, {
+    ok: true,
+    accepted: 1,
+    replaced: 2,
+    merged: 1,
+    preserved: 0,
+  });
+  let historicalRecords = persisted(storePath).records.filter((record) =>
+    record.tokenHash === user.tokenHash
+      && record.deviceId === DEVICE_A
+      && record.date === historicalDay
+      && record.tool === "codex"
+  );
+  assert.equal(historicalRecords.length, 1);
+  assert.equal(historicalRecords[0].model, "recovered-higher");
+
+  const snapshot = await store.appendTokenRankUsage(token, v2Payload({
+    records: [codexRecord({ date: historicalDay, model: "authoritative", input: 9, output: 1, cache: 10 })],
+    snapshotId: "snapshot-after-backfill",
+  }));
+  assert.deepEqual(snapshot, { ok: true, accepted: 1, replaced: 1 });
+  historicalRecords = persisted(storePath).records.filter((record) =>
+    record.tokenHash === user.tokenHash
+      && record.deviceId === DEVICE_A
+      && record.date === historicalDay
+      && record.tool === "codex"
+  );
+  assert.equal(historicalRecords.length, 1);
+  assert.equal(historicalRecords[0].model, "authoritative");
+});
+
+test("partial backfill replaces a legacy zero row with a positive lower bound", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const { token, user } = await store.createTokenRankUser({ name: "backfill-legacy-zero" });
+  const historicalDay = addDays(beijingDate(), -5);
+  const data = persisted(storePath);
+  data.records.push({
+    userId: user.userId,
+    tokenHash: user.tokenHash,
+    deviceId: DEVICE_A,
+    clientVersion: "0.1.0",
+    date: historicalDay,
+    tool: "codex",
+    model: "legacy-zero",
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    inputTokenSemantics: "fresh",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+  fs.writeFileSync(storePath, JSON.stringify(data, null, 2));
+
+  const result = await store.appendTokenRankUsage(token, partialBackfillPayload({
+    records: [codexRecord({ date: historicalDay, model: "recovered-positive" })],
+  }));
+  assert.deepEqual(result, {
+    ok: true,
+    accepted: 1,
+    replaced: 1,
+    merged: 1,
+    preserved: 0,
+  });
+  const records = persisted(storePath).records.filter((record) =>
+    record.tokenHash === user.tokenHash
+      && record.deviceId === DEVICE_A
+      && record.date === historicalDay
+      && record.tool === "codex"
+  );
+  assert.equal(records.length, 1);
+  assert.equal(records[0].model, "recovered-positive");
+  assert.ok(records[0].totalTokens > 0);
+});
+
+test("partial backfill enforces its v2 historical window and Codex-only envelope", async (t) => {
+  const { store, storePath } = await setupStore(t);
+  const { token } = await store.createTokenRankUser({ name: "backfill-validation" });
+  const today = beijingDate();
+  const oldest = addDays(today, -34);
+  const yesterday = addDays(today, -1);
+
+  const valid = await store.appendTokenRankUsage(token, partialBackfillPayload({
+    records: [
+      codexRecord({ date: oldest, model: "oldest-inclusive" }),
+      codexRecord({ date: yesterday, model: "yesterday-inclusive" }),
+    ],
+  }));
+  assert.deepEqual(valid, {
+    ok: true,
+    accepted: 2,
+    replaced: 0,
+    merged: 2,
+    preserved: 0,
+  });
+
+  const collectorPayload = v2Payload({ records: [], includeSnapshot: false });
+  const snapshotPayload = v2Payload({ records: [] });
+  const invalidPayloads = [
+    partialBackfillPayload(),
+    { ...partialBackfillPayload({ records: [codexRecord({ date: yesterday })] }), protocolVersion: 1 },
+    {
+      ...partialBackfillPayload({ records: [codexRecord({ date: yesterday })] }),
+      collector: collectorPayload.collector,
+    },
+    {
+      ...partialBackfillPayload({ records: [codexRecord({ date: yesterday })] }),
+      collector: snapshotPayload.collector,
+      snapshot: snapshotPayload.snapshot,
+    },
+    partialBackfillPayload({ records: [codexRecord({ date: today })] }),
+    partialBackfillPayload({ records: [codexRecord({ date: addDays(today, 1) })] }),
+    partialBackfillPayload({ records: [codexRecord({ date: addDays(today, -35) })] }),
+    partialBackfillPayload({
+      records: [{ ...codexRecord({ date: yesterday }), tool: "cursor" }],
+    }),
+    partialBackfillPayload({
+      records: [
+        codexRecord({ date: yesterday, model: "valid-member" }),
+        { ...codexRecord({ date: oldest, model: "invalid-member" }), tool: "claude-code" },
+      ],
+    }),
+  ];
+
+  for (const payload of invalidPayloads) {
+    const before = fs.readFileSync(storePath, "utf8");
+    const result = await store.appendTokenRankUsage(token, payload);
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 400);
+    assert.equal(fs.readFileSync(storePath, "utf8"), before);
+  }
 });
 
 test("an empty authoritative snapshot clears stale Codex and records a stable real sync time", async (t) => {
