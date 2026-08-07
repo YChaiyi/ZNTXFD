@@ -4,6 +4,8 @@ set -euo pipefail
 NODE_BIN="/usr/local/bin/node"
 NPM_BIN="/usr/local/bin/npm"
 NODE_MAJOR="24"
+MANIFEST_TOOL="/usr/local/lib/znt/code-release-manifest.mjs"
+LSATTR_BIN="/usr/bin/lsattr"
 
 [[ -x "$NODE_BIN" && -x "$NPM_BIN" ]] || { echo "Node.js runtime is missing" >&2; exit 1; }
 [[ "$("$NODE_BIN" -p 'process.versions.node.split(".")[0]')" = "$NODE_MAJOR" ]] \
@@ -12,6 +14,24 @@ NODE_MAJOR="24"
 release="$(readlink -f /var/www/znt.group/current)"
 sha="$(basename "$release")"
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid active release: $release" >&2; exit 1; }
+[[ -x "$LSATTR_BIN" && -f "$MANIFEST_TOOL" && ! -L "$MANIFEST_TOOL" ]] \
+  || { echo "code release integrity tooling is missing" >&2; exit 1; }
+[[ "$(stat -c '%U:%G' "$release")" = "root:zntapp" ]] \
+  || { echo "active release ownership is invalid" >&2; exit 1; }
+release_mode="$(stat -c '%a' "$release")"
+(( (8#$release_mode & 0022) == 0 )) || { echo "active release is writable" >&2; exit 1; }
+invalid_owner="$(find -P "$release" -xdev \( ! -user root -o ! -group zntapp \) -print -quit)"
+[[ -z "$invalid_owner" ]] || { echo "active release tree ownership is invalid" >&2; exit 1; }
+invalid_mode="$(find -P "$release" -xdev \( -type d -o -type f \) -perm /022 -print -quit)"
+[[ -z "$invalid_mode" ]] || { echo "active release tree is writable" >&2; exit 1; }
+manifest="$release/.znt-code-release.json"
+[[ -f "$manifest" && ! -L "$manifest" && "$(stat -c '%U:%G %a' "$manifest")" = "root:zntapp 640" ]] \
+  || { echo "active release manifest permissions are invalid" >&2; exit 1; }
+find -P "$release" -xdev \( -type d -o -type f \) -exec "$LSATTR_BIN" -d -- {} + 2>/dev/null \
+  | awk '$1 !~ /i/ { invalid=1 } END { exit(invalid ? 1 : 0) }' \
+  || { echo "active release tree is not immutable" >&2; exit 1; }
+"$NODE_BIN" "$MANIFEST_TOOL" verify "$release" "$sha" \
+  || { echo "active release integrity verification failed" >&2; exit 1; }
 store_path="${TOKEN_RANK_STORE_PATH:-}"
 [[ -n "$store_path" ]] || { echo "TOKEN_RANK_STORE_PATH is not configured" >&2; exit 1; }
 [[ -d "$(dirname "$store_path")" && -w "$(dirname "$store_path")" ]] \

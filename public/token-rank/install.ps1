@@ -1,3 +1,14 @@
+function Compare-ZntTokenRankSemVer {
+  param([string]$Left, [string]$Right)
+  $LeftParts = @($Left.Split(".") | ForEach-Object { [int64]$_ })
+  $RightParts = @($Right.Split(".") | ForEach-Object { [int64]$_ })
+  for ($Index = 0; $Index -lt 3; $Index += 1) {
+    if ($LeftParts[$Index] -gt $RightParts[$Index]) { return 1 }
+    if ($LeftParts[$Index] -lt $RightParts[$Index]) { return -1 }
+  }
+  return 0
+}
+
 function znt-tokenrank {
   param(
     [Parameter(Position=0)][string]$Command,
@@ -10,7 +21,7 @@ function znt-tokenrank {
 
   $InstallDir = Join-Path $env:USERPROFILE ".znt-tokenrank"
   $Client = Join-Path $InstallDir "client.mjs"
-  $ClientDownload = Join-Path $InstallDir "client.download.mjs"
+  $ClientDownload = Join-Path $InstallDir "client.download.$PID.$([Guid]::NewGuid().ToString('N')).mjs"
   $ClientBackup = Join-Path $InstallDir "client.previous.mjs"
   $ConfigDir = if ($env:ZNT_TOKENRANK_HOME) { $env:ZNT_TOKENRANK_HOME } else { $InstallDir }
   $Config = Join-Path $ConfigDir "config.json"
@@ -34,8 +45,26 @@ function znt-tokenrank {
   }
 
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-  $ScriptUrl = $Endpoint -replace "/api/token-rank/upload$", "/token-rank/client.mjs"
-  Invoke-WebRequest -Uri $ScriptUrl -OutFile $ClientDownload
+  $InstallLock = Join-Path $InstallDir ".install.lock"
+  try {
+    $LockStream = [System.IO.File]::Open(
+      $InstallLock,
+      [System.IO.FileMode]::OpenOrCreate,
+      [System.IO.FileAccess]::ReadWrite,
+      [System.IO.FileShare]::None
+    )
+  } catch {
+    throw "另一个 Token 消耗榜安装正在进行，现有客户端未修改。"
+  }
+
+  try {
+    $LockStream.SetLength(0)
+    $LockBytes = [System.Text.Encoding]::UTF8.GetBytes("$PID`n")
+    $LockStream.Write($LockBytes, 0, $LockBytes.Length)
+    $LockStream.Flush()
+
+    $ScriptUrl = $Endpoint -replace "/api/token-rank/upload$", "/token-rank/client.mjs"
+    Invoke-WebRequest -Uri $ScriptUrl -OutFile $ClientDownload
   & $NodePath --check $ClientDownload
   if ($LASTEXITCODE -ne 0) {
     Remove-Item $ClientDownload -Force -ErrorAction SilentlyContinue
@@ -45,6 +74,22 @@ function znt-tokenrank {
   if ($ClientVersion -notmatch '^\d+\.\d+\.\d+$') {
     Remove-Item $ClientDownload -Force -ErrorAction SilentlyContinue
     throw "下载的客户端没有返回有效版本号，现有客户端未修改。"
+  }
+
+  $InstalledVersion = $null
+  if (Test-Path $Client) {
+    try {
+      $CandidateVersion = (& $NodePath $Client --version 2>$null | Select-Object -First 1)
+      if ($CandidateVersion -match '^\d+\.\d+\.\d+$') {
+        $InstalledVersion = $CandidateVersion
+      }
+    } catch {
+      $InstalledVersion = $null
+    }
+  }
+  if ($InstalledVersion -and ((Compare-ZntTokenRankSemVer $InstalledVersion $ClientVersion) -gt 0)) {
+    Remove-Item $ClientDownload -Force -ErrorAction SilentlyContinue
+    throw "服务端提供的客户端版本 ${ClientVersion} 低于已安装版本 ${InstalledVersion}；已阻止降级，现有客户端未修改。请联系站点管理员恢复服务器版本。"
   }
 
   $HadClient = Test-Path $Client
@@ -110,5 +155,11 @@ function znt-tokenrank {
   Remove-Item $ClientBackup -Force -ErrorAction SilentlyContinue
   Remove-Item $ConfigBackup -Force -ErrorAction SilentlyContinue
 
-  Write-Output "Token 消耗榜已接入。配置目录：$InstallDir。客户端版本：$ClientVersion"
+    Write-Output "Token 消耗榜已接入。配置目录：$InstallDir。客户端版本：$ClientVersion"
+  } finally {
+    Remove-Item $ClientDownload -Force -ErrorAction SilentlyContinue
+    if ($LockStream) {
+      $LockStream.Dispose()
+    }
+  }
 }

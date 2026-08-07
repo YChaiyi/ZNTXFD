@@ -18,10 +18,16 @@ CONFIRMED=0
 usage() {
   cat <<'EOF'
 Usage:
+  sudo bash ops/bootstrap_vps.sh prepare-integrity
   sudo bash ops/bootstrap_vps.sh prepare
   sudo bash ops/bootstrap_vps.sh migrate --confirm-migration \
     --source-sha <git-sha> \
     [--goatcounter-db /path/to/goatcounter.sqlite3]
+
+prepare-integrity
+         installs only the recovery validators, release integrity library, and
+         code deploy command. It does not replace the application entrypoint or
+         restart the service.
 
 prepare  creates the restricted accounts, directories, root-owned release tools,
          sudoers file, and an empty protected runtime layout. It does not replace
@@ -100,14 +106,19 @@ ensure_user() {
   [[ "$(id -gn "$user")" = "$group" ]] || znt_fail "existing user $user has an unexpected primary group"
 }
 
-install_tooling() {
+install_integrity_tooling() {
   install -d -o root -g root -m 0755 /usr/local/lib/znt
   install -o root -g root -m 0755 "$LIB_DIR/deploy-common.sh" /usr/local/lib/znt/deploy-common.sh
+  install -o root -g root -m 0644 "$LIB_DIR/code-release-manifest.mjs" /usr/local/lib/znt/code-release-manifest.mjs
   install -o root -g root -m 0644 "$LIB_DIR/build-content-manifest.mjs" /usr/local/lib/znt/build-content-manifest.mjs
   install -o root -g root -m 0644 "$LIB_DIR/validate-content-bundle.mjs" /usr/local/lib/znt/validate-content-bundle.mjs
+  install -o root -g root -m 0755 "$SCRIPT_DIR/bin/znt-code-deploy" /usr/local/bin/znt-code-deploy
+}
+
+install_tooling() {
+  install_integrity_tooling
   install -o root -g root -m 0755 "$LIB_DIR/extract-content-archive.py" /usr/local/lib/znt/extract-content-archive.py
   install -o root -g root -m 0755 "$SCRIPT_DIR/bin/znt-app-start" /usr/local/bin/znt-app-start
-  install -o root -g root -m 0755 "$SCRIPT_DIR/bin/znt-code-deploy" /usr/local/bin/znt-code-deploy
   install -o root -g root -m 0755 "$SCRIPT_DIR/bin/znt-content-promote" /usr/local/bin/znt-content-promote
   install -o root -g root -m 0755 "$SCRIPT_DIR/bin/znt-deploy-ssh" /usr/local/bin/znt-deploy-ssh
   install -o root -g root -m 0755 "$SCRIPT_DIR/bin/znt-content-ssh" /usr/local/bin/znt-content-ssh
@@ -366,8 +377,18 @@ nginx_preflight() {
 }
 
 prepare() {
+  local active_release active_sha
+
   znt_require_root
   znt_require_node_runtime
+  [[ -x "$ZNT_CHATTR_BIN" && -x "$ZNT_LSATTR_BIN" ]] \
+    || znt_fail "e2fsprogs chattr/lsattr are required"
+  if [[ -L "$ROOT/current" ]]; then
+    active_release="$(znt_realpath "$ROOT/current")"
+    active_sha="$(basename "$active_release")"
+    znt_code_release_valid "$active_release" "$active_sha" \
+      || znt_fail "active code release must be sealed before prepare replaces the application entrypoint"
+  fi
   prepare_layout
   install_tooling
   install_build_slice
@@ -377,6 +398,15 @@ prepare() {
   fi
   validate_store
   echo "prepared restricted ZNT VPS layout under $ROOT"
+}
+
+prepare_integrity() {
+  znt_require_root
+  znt_require_node_runtime
+  [[ -x "$ZNT_CHATTR_BIN" && -x "$ZNT_LSATTR_BIN" ]] \
+    || znt_fail "e2fsprogs chattr/lsattr are required"
+  install_integrity_tooling
+  echo "installed release integrity tooling without changing the application entrypoint"
 }
 
 snapshot_goatcounter() {
@@ -564,6 +594,7 @@ build_initial_code() {
   find -P "$candidate" -type f ! -perm /u+x -exec chmod 0640 {} +
   mv "$candidate" "$release"
   MIGRATION_RELEASE_CANDIDATE=""
+  znt_seal_code_release "$release" "$code_sha"
   touch "$RELEASES/.protected/$code_sha"
   MIGRATION_CODE_RELEASE="$release"
 }
@@ -647,6 +678,7 @@ migrate() {
         systemctl daemon-reload || true
       fi
       if [[ -n "$MIGRATION_CODE_RELEASE" && -d "$MIGRATION_CODE_RELEASE" ]]; then
+        znt_unseal_code_release "$MIGRATION_CODE_RELEASE" || true
         rm -rf -- "$MIGRATION_CODE_RELEASE"
         rm -f -- "$RELEASES/.protected/$code_sha"
       fi
@@ -726,7 +758,7 @@ migrate() {
   switched=1
   znt_switch_link "$RELEASES/$code_sha" "$ROOT/current"
   znt_switch_link "$CONTENT_RELEASES/$content_version" "$CONTENT_ROOT/current"
-  znt_start_and_check "$SERVICE" "$code_sha" || znt_fail "migration health check failed"
+  znt_start_and_check "$SERVICE" "$code_sha" "$ROOT" "$content_version" || znt_fail "migration health check failed"
   service_stopped=0
   if [[ -f "$old_store" ]]; then
     retired_store="$snapshot/retired-token-rank-store.json"
@@ -740,6 +772,9 @@ migrate() {
   echo "migration complete: code=$code_sha content=$content_version snapshot=$snapshot"
 }
 case "$COMMAND" in
+  prepare-integrity)
+    prepare_integrity
+    ;;
   prepare)
     prepare
     ;;

@@ -192,7 +192,8 @@ test("the real installer rebuilds legacy Codex history twice without touching ot
     endpoint,
     "--no-schedule",
   ], { env: environment, timeout: 60_000 });
-  assert.match(first.stdout, /客户端版本：0\.2\.2/);
+  assert.match(first.stdout, /客户端版本：0\.2\.3/);
+  assert.match(first.stdout, /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+08:00\] \[znt-tokenrank 0\.2\.3\] znt-tokenrank synced/m);
   assert.equal(uploads.length, 1);
   assert.equal(uploads[0].protocolVersion, 2);
   assert.equal(uploads[0].snapshot.complete, true);
@@ -216,7 +217,7 @@ test("the real installer rebuilds legacy Codex history twice without touching ot
     endpoint,
     "--no-schedule",
   ], { env: environment, timeout: 60_000 });
-  assert.match(second.stdout, /客户端版本：0\.2\.2/);
+  assert.match(second.stdout, /客户端版本：0\.2\.3/);
   assert.equal(uploads.length, 2);
   assert.equal(uploads[1].deviceId, DEVICE_ID);
 
@@ -303,6 +304,218 @@ test("a rejected first upload restores the previous client and configuration", a
   assert.equal(fs.readdirSync(installDir).some((name) => name.includes(".pending")), false);
 });
 
+test("the shell installer refuses a numeric semantic-version downgrade", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-install-downgrade-"));
+  const home = path.join(root, "home");
+  const installDir = path.join(home, ".znt-tokenrank");
+  fs.mkdirSync(installDir, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const clientPath = path.join(installDir, "client.mjs");
+  const configPath = path.join(installDir, "config.json");
+  const previousClient = [
+    "#!/usr/bin/env node",
+    "if (process.argv.includes('--version')) console.log('0.10.0');",
+    "",
+  ].join("\n");
+  const previousConfig = JSON.stringify({ marker: "must-survive-downgrade" });
+  fs.writeFileSync(clientPath, previousClient, { mode: 0o755 });
+  fs.writeFileSync(configPath, previousConfig, { mode: 0o600 });
+
+  const clientSource = fs.readFileSync(
+    path.join(process.cwd(), "public", "token-rank", "client.mjs"),
+    "utf8",
+  );
+  let downloadAttempts = 0;
+  let uploadAttempts = 0;
+  const server = http.createServer(async (request, response) => {
+    if (request.method === "GET" && request.url === "/token-rank/client.mjs") {
+      downloadAttempts += 1;
+      response.writeHead(200, { "content-type": "text/javascript" });
+      response.end(clientSource);
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/token-rank/upload") {
+      uploadAttempts += 1;
+      response.writeHead(500);
+      response.end("must not upload");
+      return;
+    }
+    response.writeHead(404);
+    response.end("not found");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  const token = "znt_trk_downgrade_must_not_be_logged";
+
+  await assert.rejects(
+    execFileAsync("bash", [
+      path.join(process.cwd(), "public", "token-rank", "install.sh"),
+      "--token",
+      token,
+      "--endpoint",
+      `http://127.0.0.1:${address.port}/api/token-rank/upload`,
+      "--no-schedule",
+    ], {
+      env: {
+        ...process.env,
+        HOME: home,
+        ZNT_TOKENRANK_HOME: installDir,
+        ZNT_TOKENRANK_NODE: process.execPath,
+      },
+      timeout: 60_000,
+    }),
+    (error) => {
+      assert.match(error.stderr, /版本 0\.2\.3 低于已安装版本 0\.10\.0；已阻止降级/);
+      assert.doesNotMatch(error.stderr, new RegExp(token));
+      return true;
+    },
+  );
+
+  assert.equal(downloadAttempts, 1);
+  assert.equal(uploadAttempts, 0);
+  assert.equal(fs.readFileSync(clientPath, "utf8"), previousClient);
+  assert.equal(fs.readFileSync(configPath, "utf8"), previousConfig);
+  assert.equal(fs.existsSync(path.join(installDir, "client.previous.mjs")), false);
+  assert.equal(fs.readdirSync(installDir).some((name) => name.startsWith("client.download.")), false);
+});
+
+test("the PowerShell installer contains the same semantic-version downgrade guard", () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), "public", "token-rank", "install.ps1"),
+    "utf8",
+  );
+  assert.match(source, /function Compare-ZntTokenRankSemVer/);
+  assert.match(source, /\$InstalledVersion.*\$ClientVersion/s);
+  assert.match(source, /已阻止降级，现有客户端未修改/);
+  assert.match(source, /FileShare\]::None/);
+  assert.match(source, /client\.download\.\$PID\.\$\(\[Guid\]/);
+});
+
+test("the shell installer serializes concurrent installation transactions", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-install-lock-"));
+  const home = path.join(root, "home");
+  const installDir = path.join(home, ".znt-tokenrank");
+  fs.mkdirSync(installDir, { recursive: true });
+  fs.writeFileSync(path.join(installDir, ".install.lock"), "stale lock contents\n");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const clientSource = fs.readFileSync(
+    path.join(process.cwd(), "public", "token-rank", "client.mjs"),
+    "utf8",
+  );
+  let downloadAttempts = 0;
+  let uploadAttempts = 0;
+  let releaseUpload;
+  let markUploadStarted;
+  const uploadStarted = new Promise((resolve) => { markUploadStarted = resolve; });
+  const uploadRelease = new Promise((resolve) => { releaseUpload = resolve; });
+  const server = http.createServer(async (request, response) => {
+    if (request.method === "GET" && request.url === "/token-rank/client.mjs") {
+      downloadAttempts += 1;
+      response.writeHead(200, { "content-type": "text/javascript" });
+      response.end(clientSource);
+      return;
+    }
+    if (request.method === "POST" && request.url === "/api/token-rank/upload") {
+      uploadAttempts += 1;
+      const body = await readRequestJson(request);
+      markUploadStarted();
+      await uploadRelease;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: 0, accepted: body.records.length }));
+      return;
+    }
+    response.writeHead(404);
+    response.end("not found");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  const endpoint = `http://127.0.0.1:${address.port}/api/token-rank/upload`;
+  const args = [
+    path.join(process.cwd(), "public", "token-rank", "install.sh"),
+    "--token",
+    "legacy-install-token",
+    "--endpoint",
+    endpoint,
+    "--no-schedule",
+  ];
+  const options = {
+    env: {
+      ...process.env,
+      HOME: home,
+      ZNT_TOKENRANK_HOME: installDir,
+      ZNT_TOKENRANK_NODE: process.execPath,
+    },
+    timeout: 60_000,
+  };
+
+  const first = execFileAsync("bash", args, options);
+  await uploadStarted;
+  try {
+    await assert.rejects(
+      execFileAsync("bash", args, options),
+      /另一个 Token 消耗榜安装正在进行/,
+    );
+  } finally {
+    releaseUpload();
+  }
+  await first;
+
+  assert.equal(downloadAttempts, 1);
+  assert.equal(uploadAttempts, 1);
+  assert.equal(fs.statSync(path.join(installDir, ".install.lock")).isFile(), true);
+});
+
+test("an invalid HTTP 200 acknowledgement cannot echo an arbitrary token", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-invalid-ack-"));
+  const home = path.join(root, "home");
+  const installDir = path.join(home, ".znt-tokenrank");
+  fs.mkdirSync(installDir, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeIncompleteCodexFixture(home, Date.now());
+
+  const token = "legacy-ack-secret-must-not-be-logged";
+  const server = http.createServer(async (request, response) => {
+    if (request.method === "POST" && request.url === "/api/token-rank/upload") {
+      await readRequestJson(request);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: 0, accepted: token }));
+      return;
+    }
+    response.writeHead(404);
+    response.end("not found");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.equal(typeof address, "object");
+
+  const clientPath = path.join(installDir, "client.mjs");
+  fs.copyFileSync(path.join(process.cwd(), "public", "token-rank", "client.mjs"), clientPath);
+  fs.writeFileSync(path.join(installDir, "config.json"), JSON.stringify({
+    token,
+    endpoint: `http://127.0.0.1:${address.port}/api/token-rank/upload`,
+    deviceId: DEVICE_ID,
+  }), { mode: 0o600 });
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [clientPath], {
+      env: { ...process.env, HOME: home, ZNT_TOKENRANK_HOME: installDir },
+      timeout: 60_000,
+    }),
+    (error) => {
+      assert.match(error.stderr, /服务端返回了无效的确认结果/);
+      assert.doesNotMatch(error.stderr, new RegExp(token));
+      return true;
+    },
+  );
+});
+
 test("an incomplete migrated history installs safely and retries the authoritative rebuild", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-install-migrated-"));
   const home = path.join(root, "home");
@@ -354,7 +567,7 @@ test("an incomplete migrated history installs safely and retries the authoritati
   ], { env: environment, timeout: 60_000 });
 
   assert.match(first.stderr, /仅合并今日已确认的下界统计.*自动重试完整重建/);
-  assert.match(first.stdout, /客户端版本：0\.2\.2/);
+  assert.match(first.stdout, /客户端版本：0\.2\.3/);
   assert.equal(uploads.length, 1);
   assert.equal(uploads[0].records.some((record) => record.tool === "codex"), true);
   assert.equal(uploads[0].codexMode, "partial");
@@ -376,6 +589,72 @@ test("an incomplete migrated history installs safely and retries the authoritati
     JSON.parse(fs.readFileSync(path.join(installDir, "config.json"), "utf8")),
     "pendingCodexHistoryRebuild",
   ), false);
+});
+
+test("a partial client reports an incompatible server with timestamped redacted logs", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-protocol-mismatch-"));
+  const home = path.join(root, "home");
+  const installDir = path.join(home, ".znt-tokenrank");
+  fs.mkdirSync(installDir, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeIncompleteCodexFixture(home, Date.now());
+
+  const token = "legacy-protocol-secret-must-not-be-logged";
+  let uploadedBody = null;
+  const server = http.createServer(async (request, response) => {
+    if (request.method === "POST" && request.url === "/api/token-rank/upload") {
+      uploadedBody = await readRequestJson(request);
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        status: 400,
+        message: `v2 Codex records 必须带 collector (${token})\nforged-line\u001b[31m`,
+      }));
+      return;
+    }
+    response.writeHead(404);
+    response.end("not found");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.equal(typeof address, "object");
+
+  const clientPath = path.join(installDir, "client.mjs");
+  fs.copyFileSync(path.join(process.cwd(), "public", "token-rank", "client.mjs"), clientPath);
+  fs.writeFileSync(path.join(installDir, "config.json"), JSON.stringify({
+    token,
+    endpoint: `http://127.0.0.1:${address.port}/api/token-rank/upload`,
+    deviceId: DEVICE_ID,
+    pendingCodexHistoryRebuild: true,
+  }), { mode: 0o600 });
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [clientPath], {
+      env: {
+        ...process.env,
+        HOME: home,
+        ZNT_TOKENRANK_HOME: installDir,
+      },
+      timeout: 60_000,
+    }),
+    (error) => {
+      const lines = error.stderr.trim().split("\n");
+      assert.ok(lines.length >= 2);
+      assert.ok(lines.every((line) => (
+        /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+08:00\] \[znt-tokenrank 0\.2\.3\] /.test(line)
+      )));
+      assert.match(error.stderr, /服务端与客户端协议不兼容：客户端 0\.2\.3 需要 Token Rank v2 partial 协议/);
+      assert.match(error.stderr, /服务端返回 400/);
+      assert.match(error.stderr, /\[REDACTED\]/);
+      assert.doesNotMatch(error.stderr, new RegExp(token));
+      assert.doesNotMatch(error.stderr, /\u001b/);
+      return true;
+    },
+  );
+
+  assert.equal(uploadedBody.codexMode, "partial");
+  assert.equal(Object.hasOwn(uploadedBody, "collector"), false);
+  assert.equal(Object.hasOwn(uploadedBody, "snapshot"), false);
 });
 
 test("a failed authoritative retry keeps the pending rebuild marker", async (t) => {
@@ -570,7 +849,7 @@ test("the installer completes scheduled setup under a UTF-8 locale", async (t) =
   });
 
   assert.equal(uploadAttempts, 1);
-  assert.match(result.stdout, /配置目录：.*\.znt-tokenrank。客户端版本：0\.2\.2/);
+  assert.match(result.stdout, /配置目录：.*\.znt-tokenrank。客户端版本：0\.2\.3/);
   assert.equal(fs.existsSync(path.join(home, "Library", "LaunchAgents", "group.znt.tokenrank.plist")), true);
 });
 

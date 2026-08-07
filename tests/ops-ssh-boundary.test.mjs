@@ -97,10 +97,10 @@ test("code deployment accepts only a SHA and binds it to public GitHub main", ()
   assert.match(common, /exec \{ZNT_ACTIVE_LOCK_FD\}>&-/);
   assert.match(dispatcher, /exec \{UPLOAD_LOCK_FD\}>&-/);
   assert.match(fs.readFileSync("ops/bin/znt-content-ssh", "utf8"), /exec \{UPLOAD_LOCK_FD\}>&-/);
-  assert.ok(
-    deploy.indexOf("is already active") < deploy.indexOf("znt_clone_verified_public_main"),
-    "active-SHA idempotency must run before the expensive clone/build",
-  );
+  assert.match(deploy, /znt_code_release_valid "\$release" "\$SHA"/);
+  assert.match(deploy, /znt_health_matches "\$SHA" "\$previous_content_version"/);
+  assert.match(deploy, /match-source "\$release" "\$fetch_workspace\/source"/);
+  assert.match(deploy, /refusing to trust or overwrite the existing SHA/);
   assert.doesNotMatch(bootstrap, /--source-archive|--source-sha256|SOURCE_ARCHIVE/);
   assert.match(bootstrap, /build_initial_code "\$code_sha" "\$snapshot"/);
 });
@@ -124,10 +124,14 @@ test("release scripts do not roll back links after committing deployment state",
 test("the application entrypoint binds Next.js to loopback only", () => {
   const entrypoint = fs.readFileSync("ops/bin/znt-app-start", "utf8");
   assert.match(entrypoint, /exec "\$NPM_BIN" start -- --hostname 127\.0\.0\.1/);
+  assert.match(entrypoint, /code-release-manifest\.mjs/);
+  assert.match(entrypoint, /active release tree is not immutable/);
+  assert.match(entrypoint, /active release tree ownership is invalid/);
 });
 
 test("Next image optimization does not write cache files into immutable releases", () => {
   const config = fs.readFileSync("next.config.ts", "utf8");
+  assert.match(config, /unoptimized:\s*true/);
   assert.match(config, /maximumDiskCacheSize:\s*0/);
 });
 

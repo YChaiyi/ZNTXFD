@@ -21,6 +21,8 @@ export async function GET(request: NextRequest) {
       contentVersion: content.contentVersion,
       contentSchemaVersion: content.schemaVersion,
       tokenRankStoreReady,
+      tokenRankUploadProtocol: 2,
+      tokenRankPartialUpload: true,
     },
     { status: ready ? 200 : 503 },
   );

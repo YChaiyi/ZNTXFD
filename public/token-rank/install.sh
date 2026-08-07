@@ -31,8 +31,7 @@ if [[ -z "$TOKEN" || -z "$ENDPOINT" ]]; then
 fi
 
 if [[ "$TOKEN" == *"xxx"* || "$TOKEN" == *"your_private_token"* ]]; then
-  echo "令牌还是占位符：$TOKEN" >&2
-  echo "请先在 Token 消耗榜页面点击「生成命令」，复制生成后的真实专属命令。" >&2
+  echo "令牌还是占位符。请先在 Token 消耗榜页面点击「生成命令」，复制生成后的真实专属命令。" >&2
   exit 1
 fi
 
@@ -58,7 +57,37 @@ if [[ ! "$NODE_MAJOR" =~ ^[0-9]+$ || "$NODE_MAJOR" -lt 18 ]]; then
 fi
 
 mkdir -p "$INSTALL_DIR"
-trap 'rm -f "$CLIENT_DOWNLOAD"' EXIT
+INSTALL_LOCK="$INSTALL_DIR/.install.lock"
+INSTALL_LOCK_HELD=false
+
+cleanup_install() {
+  rm -f "$CLIENT_DOWNLOAD"
+  [[ "$INSTALL_LOCK_HELD" != true ]] || exec 9>&-
+}
+
+acquire_install_lock() {
+  umask 077
+  exec 9>> "$INSTALL_LOCK"
+  chmod 0600 "$INSTALL_LOCK"
+  if command -v flock >/dev/null 2>&1; then
+    flock -n 9 || {
+      echo "另一个 Token 消耗榜安装正在进行，现有客户端未修改。" >&2
+      return 1
+    }
+  elif command -v lockf >/dev/null 2>&1; then
+    lockf -s -t 0 9 || {
+      echo "另一个 Token 消耗榜安装正在进行，现有客户端未修改。" >&2
+      return 1
+    }
+  else
+    echo "系统缺少 flock/lockf，无法安全安装 Token 消耗榜客户端。" >&2
+    return 1
+  fi
+  INSTALL_LOCK_HELD=true
+}
+
+trap cleanup_install EXIT
+acquire_install_lock
 curl -fsSL "$SCRIPT_URL" -o "$CLIENT_DOWNLOAD"
 if ! "$NODE_BIN" --check "$CLIENT_DOWNLOAD"; then
   echo "下载的客户端脚本校验失败，现有客户端未修改。" >&2
@@ -71,6 +100,31 @@ if [[ ! "$CLIENT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 chmod +x "$CLIENT_DOWNLOAD"
+
+semver_greater_than() {
+  local left_major left_minor left_patch right_major right_minor right_patch
+  IFS=. read -r left_major left_minor left_patch <<< "$1"
+  IFS=. read -r right_major right_minor right_patch <<< "$2"
+  if (( 10#$left_major != 10#$right_major )); then
+    (( 10#$left_major > 10#$right_major ))
+    return
+  fi
+  if (( 10#$left_minor != 10#$right_minor )); then
+    (( 10#$left_minor > 10#$right_minor ))
+    return
+  fi
+  (( 10#$left_patch > 10#$right_patch ))
+}
+
+INSTALLED_VERSION=""
+if [[ -f "$CLIENT" ]]; then
+  INSTALLED_VERSION="$("$NODE_BIN" "$CLIENT" --version 2>/dev/null || true)"
+  if [[ "$INSTALLED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    && semver_greater_than "$INSTALLED_VERSION" "$CLIENT_VERSION"; then
+    echo "服务端提供的客户端版本 ${CLIENT_VERSION} 低于已安装版本 ${INSTALLED_VERSION}；已阻止降级，现有客户端未修改。请联系站点管理员恢复服务器版本。" >&2
+    exit 1
+  fi
+fi
 
 HAD_CLIENT=false
 if [[ -f "$CLIENT" ]]; then
@@ -260,5 +314,6 @@ trap - ERR
 rm -f "$CLIENT_BACKUP" "$CONFIG_BACKUP" "${PLIST_BACKUP:-}" \
   "${SYSTEMD_SERVICE_BACKUP:-}" "${SYSTEMD_TIMER_BACKUP:-}" \
   "${CRON_BACKUP:-}" "${CRON_NEXT:-}"
+cleanup_install
 trap - EXIT
 echo "Token 消耗榜已接入。配置目录：${INSTALL_DIR}。客户端版本：$CLIENT_VERSION"

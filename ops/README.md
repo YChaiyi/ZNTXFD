@@ -58,6 +58,14 @@
   memory, task, runtime, file-size, and reserved-disk limits. Content follows
   the same boundary. Validation uses the root-owned validator in
   `/usr/local/lib/znt/`, never a file from the active release.
+- Every code release contains a root-owned manifest with a complete directory
+  inventory plus SHA-256 hashes for every regular file and symbolic-link
+  target, including source, dependencies, and build output. After validation,
+  all regular files and directories in the release receive the Linux immutable attribute.
+  Same-SHA adoption also compares the complete source file set and every source
+  file hash against a fresh GitHub `main` checkout. App startup, same-SHA
+  deployment, content promotion, and rollback recursively reject a missing
+  marker, changed hash, wrong owner, writable path, or missing immutable bit.
 - SSH public keys are stored in root-owned files under
   `/etc/ssh/authorized_keys/`. `sshd` applies a root-owned `ForceCommand` to
   each account, so a deployment key cannot open a shell, modify its own key
@@ -86,6 +94,31 @@ unit and are not stored in Git.
 The bootstrap creates a valid empty Token Rank store only when no store is
 present. It validates that store before the app can start.
 
+For an already migrated host whose active release predates release sealing, do
+not run `prepare` directly. Install the integrity tooling, then deploy a new
+clean `main` SHA through the one-time recovery path. The recovery path moves
+the unsealed tree into a hidden quarantine directory, never records it as a
+normal rollback target, validates and externalizes any embedded legacy daily
+and knowledge content, and restores the old pair as an emergency fallback if
+the new release fails:
+
+```bash
+sudo bash ops/bootstrap_vps.sh prepare-integrity
+sudo /usr/local/bin/znt-code-deploy --recover-unsealed <new-main-sha>
+sudo bash ops/bootstrap_vps.sh prepare
+sudo systemctl restart znt-group.service
+```
+
+`prepare-integrity` changes only the root-owned integrity/recovery validators
+and code deployer. The recovery command builds and verifies the requested SHA
+from the public `main`, seals it, snapshots any complete legacy `data/` and
+`public/digest-images/` tree into a validated content release, switches the
+new code/content pair atomically, and writes an empty previous pair. It aborts
+if that legacy content changes during the build. Only a sealed active release
+permits `prepare` to replace the application entrypoint. After the first
+successful recovery, publish one further clean commit before relying on normal
+paired rollback.
+
 Do not install either public deployment key before the first migration has
 succeeded. The legacy tree is preserved as-is during candidate preparation;
 keeping both restricted accounts keyless prevents a remote session from
@@ -97,6 +130,10 @@ passwords. The key files and SSH policy are root-owned; each key file is
 group-readable only by its matching restricted account and is not writable by
 that account. `ForceCommand` accepts only `deploy-code <sha>` or
 `upload-content`/`promote-content`.
+Remove every workstation-shared key from `/home/ubuntu/.ssh/authorized_keys`
+after a separately held administrator key has been tested. A publisher with an
+`ubuntu` shell or unrestricted sudo can bypass the content boundary and must
+be treated as a migration failure.
 Prefix each public-key line with `restrict` as an additional OpenSSH defense:
 
 ```bash
@@ -165,7 +202,10 @@ must not use the old `ubuntu` deployment account.
 
 All code deployment, content promotion, and rollback commands use the same
 VPS lock. Code and rollback stop the app before switching both release
-pointers, then restart and verify `/api/health`. The state file stores the
+pointers, then restart and verify `/api/health`. Health validation requires
+the exact build SHA plus Token Rank upload protocol 2 with partial-upload
+support; a correct-looking release directory name is not sufficient. The
+state file stores the
 current pair and its exact preceding pair, so rollback toggles whole
 code/content combinations rather than a stale single pointer.
 
