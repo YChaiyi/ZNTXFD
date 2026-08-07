@@ -119,6 +119,25 @@ permits `prepare` to replace the application entrypoint. After the first
 successful recovery, publish one further clean commit before relying on normal
 paired rollback.
 
+If the existing restricted deployer can first activate a new, clean `main` SHA,
+the active release can instead be adopted in place without trusting its
+directory name:
+
+```bash
+# First deploy <new-main-sha> through the existing restricted GitHub workflow.
+sudo bash /var/www/znt.group/current/ops/bootstrap_vps.sh prepare-integrity
+sudo /usr/local/bin/znt-code-deploy <same-new-main-sha>
+sudo bash /var/www/znt.group/current/ops/bootstrap_vps.sh prepare
+sudo systemctl restart znt-group.service
+```
+
+Same-SHA adoption requires the running health endpoint to report the exact SHA,
+content version, and Token Rank partial-upload protocol. It then compares every
+source path and hash against a fresh public `main` checkout before writing the
+manifest and immutable attributes. Do not invoke rollback until one further
+clean `main` SHA has been deployed, because the preceding state may still point
+to the polluted legacy release.
+
 Do not install either public deployment key before the first migration has
 succeeded. The legacy tree is preserved as-is during candidate preparation;
 keeping both restricted accounts keyless prevents a remote session from
