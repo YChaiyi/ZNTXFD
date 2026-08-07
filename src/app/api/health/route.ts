@@ -23,6 +23,7 @@ export async function GET(request: NextRequest) {
       tokenRankStoreReady,
       tokenRankUploadProtocol: 2,
       tokenRankPartialUpload: true,
+      tokenRankPartialBackfill: true,
     },
     { status: ready ? 200 : 503 },
   );

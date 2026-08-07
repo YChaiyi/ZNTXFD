@@ -46,7 +46,7 @@ jobs:
           ) | Out-Null
           if ($errors.Count -ne 0) { throw ($errors | Out-String) }
           . ./public/token-rank/install.ps1
-          if ((Compare-ZntTokenRankSemVer "0.10.0" "0.2.3") -le 0) {
+          if ((Compare-ZntTokenRankSemVer "0.10.0" "0.2.4") -le 0) {
             throw "PowerShell semantic-version comparison regressed"
           }
       - name: Install and validate source-only tree

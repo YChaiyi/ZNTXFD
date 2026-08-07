@@ -102,6 +102,7 @@ test("unsealed release adoption requires source equality with GitHub checkout", 
 
 test("deployment seals code and validates protocol before code or content activation", () => {
   const common = fs.readFileSync("ops/lib/deploy-common.sh", "utf8");
+  const healthRoute = fs.readFileSync("src/app/api/health/route.ts", "utf8");
   const deploy = fs.readFileSync("ops/bin/znt-code-deploy", "utf8");
   const promote = fs.readFileSync("ops/bin/znt-content-promote", "utf8");
   const rollback = fs.readFileSync("ops/bin/znt-rollback", "utf8");
@@ -110,6 +111,7 @@ test("deployment seals code and validates protocol before code or content activa
   assert.match(common, /find -P "\$release" -xdev .*"\$ZNT_CHATTR_BIN" \+i/);
   assert.match(common, /health\.tokenRankUploadProtocol === 2/);
   assert.match(common, /health\.tokenRankPartialUpload === true/);
+  assert.match(healthRoute, /tokenRankPartialBackfill: true/);
   assert.match(common, /znt_code_release_permissions_valid/);
   assert.match(common, /partial seal was removed/);
   assert.match(deploy, /znt_seal_code_release "\$release" "\$SHA"/);

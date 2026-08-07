@@ -146,7 +146,7 @@ type PreparedUpload = {
   deviceId: string;
   clientVersion: string;
   protocolVersion: 1 | 2;
-  codexMode: "partial" | null;
+  codexMode: "partial" | "partial-backfill" | null;
   collector: PreparedCollector | null;
   snapshot: PreparedSnapshot | null;
   records: PreparedRecord[];
@@ -442,12 +442,15 @@ function validateUpload(input: UploadInput, nowMs = Date.now()):
     return { ok: false, message: "protocolVersion 只支持 1 或 2" };
   }
   const strict = protocolVersion === 2;
-  let codexMode: "partial" | null = null;
+  let codexMode: "partial" | "partial-backfill" | null = null;
   if (input.codexMode !== undefined && input.codexMode !== null) {
-    if (!strict || input.codexMode !== "partial") {
-      return { ok: false, message: "codexMode 仅支持 v2 partial" };
+    if (
+      !strict ||
+      (input.codexMode !== "partial" && input.codexMode !== "partial-backfill")
+    ) {
+      return { ok: false, message: "codexMode 仅支持 v2 partial 或 partial-backfill" };
     }
-    codexMode = "partial";
+    codexMode = input.codexMode;
   }
   const deviceId = typeof input.deviceId === "string" ? input.deviceId.trim() : "";
   if (strict && !/^[0-9a-f]{32}$/.test(deviceId)) {
@@ -549,7 +552,7 @@ function validateUpload(input: UploadInput, nowMs = Date.now()):
   }
 
   const codexRecords = records.filter((record) => record.tool === "codex");
-  if (strict && codexRecords.length > 0 && !collector && codexMode !== "partial") {
+  if (strict && codexRecords.length > 0 && !collector && codexMode === null) {
     return { ok: false, message: "v2 Codex records 必须带 collector" };
   }
   if (codexMode === "partial") {
@@ -560,6 +563,22 @@ function validateUpload(input: UploadInput, nowMs = Date.now()):
     const allowedDates = new Set([fallbackDate, addDays(fallbackDate, -1)]);
     if (partialDates.size > 1 || [...partialDates].some((date) => !allowedDates.has(date))) {
       return { ok: false, message: "partial Codex 上报仅允许北京时间今日或昨日的单日记录" };
+    }
+  }
+  if (codexMode === "partial-backfill") {
+    if (collector || snapshot) {
+      return { ok: false, message: "partial-backfill Codex 上报不能携带 collector 或 snapshot" };
+    }
+    if (records.length === 0 || codexRecords.length !== records.length) {
+      return { ok: false, message: "partial-backfill 必须包含至少一条且只能包含 Codex 记录" };
+    }
+    const startDate = addDays(fallbackDate, -(HISTORY_DAYS - 1));
+    const endDate = addDays(fallbackDate, -1);
+    if (codexRecords.some((record) => record.date < startDate || record.date > endDate)) {
+      return {
+        ok: false,
+        message: `partial-backfill 仅允许 ${startDate} 至 ${endDate} 的历史记录`,
+      };
     }
   }
   if (
@@ -725,6 +744,7 @@ export async function appendTokenRankUsage(
         .filter((record) => (
           !(prepared.snapshot && record.tool === "codex")
           && !(prepared.codexMode === "partial" && record.tool === "codex")
+          && !(prepared.codexMode === "partial-backfill" && record.tool === "codex")
         ))
         .map((record) => JSON.stringify([
           tokenHash,
@@ -760,12 +780,22 @@ export async function appendTokenRankUsage(
       createdAt: commitTime,
     }));
     const regularRecords = incomingRecords.filter(
-      (record) => prepared.codexMode !== "partial" || record.tool !== "codex",
+      (record) => (
+        (prepared.codexMode !== "partial" && prepared.codexMode !== "partial-backfill")
+        || record.tool !== "codex"
+      ),
     );
     store.records.push(...regularRecords);
 
     let merged = 0;
     let preserved = 0;
+    const counters = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const;
+    const summarize = (items: TokenRankUsageRecord[]) => Object.fromEntries(
+      counters.map((counter) => [
+        counter,
+        items.reduce((sum, record) => sum + record[counter], 0),
+      ]),
+    ) as Record<(typeof counters)[number], number>;
     if (prepared.codexMode === "partial") {
       const partialRecords = incomingRecords.filter((record) => record.tool === "codex");
       if (partialRecords.length > 0) {
@@ -776,13 +806,6 @@ export async function appendTokenRankUsage(
           && record.date === partialDate
           && record.tool === "codex"
         );
-        const counters = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const;
-        const summarize = (items: TokenRankUsageRecord[]) => Object.fromEntries(
-          counters.map((counter) => [
-            counter,
-            items.reduce((sum, record) => sum + record[counter], 0),
-          ]),
-        ) as Record<(typeof counters)[number], number>;
         const incomingTotals = summarize(partialRecords);
         const existingTotals = summarize(existingRecords);
         const dominates = counters.every(
@@ -804,6 +827,51 @@ export async function appendTokenRankUsage(
           merged = partialRecords.length;
         } else {
           preserved = partialRecords.length;
+        }
+      }
+    }
+    if (prepared.codexMode === "partial-backfill") {
+      const recordsByDate = new Map<string, TokenRankUsageRecord[]>();
+      for (const record of incomingRecords) {
+        const dateRecords = recordsByDate.get(record.date) ?? [];
+        dateRecords.push(record);
+        recordsByDate.set(record.date, dateRecords);
+      }
+
+      for (const [date, dateRecords] of recordsByDate) {
+        const existingDateRecords = store.records.filter((record) =>
+          record.tokenHash === tokenHash
+          && record.deviceId === prepared.deviceId
+          && record.date === date
+          && record.tool === "codex"
+        );
+        const dateCoveredBySnapshot = Boolean(
+          previousCollector?.snapshotStartDate
+          && previousCollector.snapshotEndDate
+          && date >= previousCollector.snapshotStartDate
+          && date <= previousCollector.snapshotEndDate,
+        );
+        const incomingTotals = summarize(dateRecords);
+        const existingTotals = summarize(existingDateRecords);
+        const dominates = counters.every(
+          (counter) => incomingTotals[counter] >= existingTotals[counter],
+        );
+        const advances = counters.some(
+          (counter) => incomingTotals[counter] > existingTotals[counter],
+        );
+
+        if (dateCoveredBySnapshot || !dominates || !advances) {
+          preserved += dateRecords.length;
+        } else {
+          store.records = store.records.filter((record) => !(
+            record.tokenHash === tokenHash
+            && record.deviceId === prepared.deviceId
+            && record.date === date
+            && record.tool === "codex"
+          ));
+          store.records.push(...dateRecords);
+          replaced += existingDateRecords.length;
+          merged += dateRecords.length;
         }
       }
     }
@@ -842,7 +910,7 @@ export async function appendTokenRankUsage(
         ok: true as const,
         accepted: incomingRecords.length,
         replaced,
-        ...(prepared.codexMode === "partial" ? { merged, preserved } : {}),
+        ...(prepared.codexMode !== null ? { merged, preserved } : {}),
       },
     };
   });

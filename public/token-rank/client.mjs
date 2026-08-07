@@ -7,7 +7,7 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 
-const VERSION = "0.2.3";
+const VERSION = "0.2.4";
 const CONFIG_DIR = process.env.ZNT_TOKENRANK_HOME || path.join(os.homedir(), ".znt-tokenrank");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 const CODEX_CACHE_PATH = path.join(CONFIG_DIR, "codex-usage-cache-v7.json.gz");
@@ -81,6 +81,13 @@ function logError(message) {
   logMessage("error", message);
 }
 
+class TokenRankProtocolCompatibilityError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "TokenRankProtocolCompatibilityError";
+  }
+}
+
 function expandHome(value) {
   if (value === "~") return os.homedir();
   if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
@@ -103,6 +110,16 @@ export function codexHistoryWindow(nowMs = Date.now()) {
     endDate,
     tools: ["codex"],
   };
+}
+
+export function selectCodexBackfillRecords(records, nowMs = Date.now()) {
+  const endDate = addDays(todayFromTime(nowMs), -1);
+  const startDate = addDays(endDate, -(HISTORY_DAYS - 2));
+  return records.filter((record) => (
+    record.tool === "codex"
+    && record.date >= startDate
+    && record.date <= endDate
+  ));
 }
 
 function beijingDayStartMs(date) {
@@ -151,6 +168,17 @@ function stageConfig(next) {
       }
     },
   };
+}
+
+function preservePendingHistoryMarker() {
+  const existing = readConfig();
+  if (!existing || existing.pendingCodexHistoryRebuild === true) return;
+  try {
+    const staged = stageConfig({ ...existing, pendingCodexHistoryRebuild: true });
+    staged.commit();
+  } catch (markerError) {
+    logWarning(`无法保留 Codex 历史待重建标记：${markerError.message}`);
+  }
 }
 
 function getArg(name) {
@@ -1089,8 +1117,8 @@ async function upload(config, records, collector = null, snapshot = null, codexM
       || /protocolVersion|codexMode|partial Codex/i.test(safeServerMessage)
     );
     if (protocolMismatch) {
-      throw new Error(
-        `服务端与客户端协议不兼容：客户端 ${VERSION} 需要 Token Rank v2 partial 协议，`
+      throw new TokenRankProtocolCompatibilityError(
+        `服务端与客户端协议不兼容：客户端 ${VERSION} 需要 Token Rank v2 partial/backfill 协议，`
         + `但服务端返回 400（${safeServerMessage}）。请联系站点管理员恢复匹配的服务端版本；本次未更新同步状态。`,
       );
     }
@@ -1164,6 +1192,7 @@ async function main() {
   }
 
   const partialCodex = codexSourceFound && !codexComplete;
+  let backfillRecords = [];
   if (partialCodex) {
     const targetDate = todayFromTime(cutoffMs);
     for (let index = records.length - 1; index >= 0; index -= 1) {
@@ -1179,7 +1208,7 @@ async function main() {
   if (codexSourceFound && !codexComplete) {
     config.pendingCodexHistoryRebuild = true;
     logWarning(
-      `Codex 历史扫描不完整，本次仅合并今日已确认的下界统计并保留线上历史快照；客户端会自动重试完整重建：${JSON.stringify(codex.diagnostics)}`,
+      `Codex 历史扫描不完整，本次优先合并今日下界并安全补传最近历史缺口；线上已有历史保持不变，客户端会自动重试完整重建：${JSON.stringify(codex.diagnostics)}`,
     );
   } else if (rebuildHistory && codexSourceFound && codexComplete) {
     delete config.pendingCodexHistoryRebuild;
@@ -1202,16 +1231,34 @@ async function main() {
     : null;
   const stagedConfig = stageConfig(config);
   let result;
+  let backfillResult = null;
   try {
     result = await upload(config, records, collector, snapshot, partialCodex ? "partial" : null);
+    backfillRecords = partialCodex ? selectCodexBackfillRecords(codex.records) : [];
+    if (backfillRecords.length > 0) {
+      try {
+        backfillResult = await upload(config, backfillRecords, null, null, "partial-backfill");
+      } catch (error) {
+        if (!(error instanceof TokenRankProtocolCompatibilityError)) throw error;
+        logWarning(
+          "服务端当前不支持 Codex 历史补传；今日主同步已完成，"
+          + "待重建标记已保留，服务端恢复后会自动重试。",
+        );
+      }
+    }
     stagedConfig.commit();
   } catch (error) {
     stagedConfig.discard();
+    if (partialCodex) preservePendingHistoryMarker();
     throw error;
   }
   logInfo(`znt-tokenrank synced ${records.length} records`);
   logInfo(`codex diagnostics ${JSON.stringify(codex.diagnostics)}`);
   logInfo(`server response ${JSON.stringify(result)}`);
+  if (backfillResult) {
+    logInfo(`codex history backfill synced ${backfillRecords.length} records`);
+    logInfo(`backfill server response ${JSON.stringify(backfillResult)}`);
+  }
 }
 
 function canonicalFilePath(value) {

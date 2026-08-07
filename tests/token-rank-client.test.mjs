@@ -9,6 +9,7 @@ import {
   codexCollectionComplete,
   codexHistoryWindow,
   parseCodexFile,
+  selectCodexBackfillRecords,
 } from "../public/token-rank/client.mjs";
 
 function writeRollout(dir, id, values, fillerBytes = 0) {
@@ -412,6 +413,30 @@ test("Codex rebuild window is exactly 35 Beijing calendar days", () => {
   assert.deepEqual(
     codexHistoryWindow(Date.parse("2026-07-22T07:30:00.000Z")),
     { startDate: "2026-06-18", endDate: "2026-07-22", tools: ["codex"] },
+  );
+});
+
+test("historical backfill selection refreshes its Beijing window at upload time", () => {
+  const beforeMidnight = Date.parse("2026-08-07T15:59:59.000Z");
+  const afterMidnight = Date.parse("2026-08-07T16:00:01.000Z");
+  const records = [
+    "2026-07-04",
+    "2026-07-05",
+    "2026-08-06",
+    "2026-08-07",
+    "2026-08-08",
+  ].flatMap((date) => [
+    { date, tool: "codex", model: "gpt-5.6-sol" },
+    { date, tool: "cursor", model: "cursor" },
+  ]);
+
+  assert.deepEqual(
+    selectCodexBackfillRecords(records, beforeMidnight).map((record) => record.date),
+    ["2026-07-04", "2026-07-05", "2026-08-06"],
+  );
+  assert.deepEqual(
+    selectCodexBackfillRecords(records, afterMidnight).map((record) => record.date),
+    ["2026-07-05", "2026-08-06", "2026-08-07"],
   );
 });
 
