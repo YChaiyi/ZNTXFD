@@ -114,10 +114,11 @@ function DigestCard({
   const topic = report.topics[index % Math.max(report.topics.length, 1)];
   const progress = image.exists ? 100 : 0;
   const previewTags = topic?.tags.slice(0, 2) ?? [];
+  const groupStat = report.stats.groups?.find((group) => group.name === image.name);
 
   return (
     <Link
-      href={`/daily/${date}`}
+      href={`/daily/${date}#digest-${image.key}`}
       className="group overflow-hidden rounded-[14px] border border-white/[0.07] bg-[#16161b] shadow-[0_1px_2px_rgba(0,0,0,0.4)] transition-all duration-200 hover:-translate-y-1 hover:border-accent/60 hover:shadow-[0_22px_44px_-20px_rgba(0,0,0,0.85)]"
     >
       <div className="relative aspect-[16/10] overflow-hidden bg-gradient-to-br from-[#3a2410] to-[#15130f]">
@@ -145,9 +146,14 @@ function DigestCard({
         >
           {image.exists ? "已生成" : "待补齐"}
         </span>
-        <span className="absolute bottom-2 right-2 rounded-md bg-[#09090b]/85 px-2 py-1 text-xs font-bold text-white">
-          {compactNumber(report.stats.total_messages)}
-        </span>
+        {groupStat ? (
+          <span
+            data-group-count={image.key}
+            className="absolute bottom-2 right-2 rounded-md bg-[#09090b]/85 px-2 py-1 text-xs font-bold text-white"
+          >
+            {compactNumber(groupStat.message_count)}
+          </span>
+        ) : null}
         <span className="absolute left-1/2 top-1/2 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 scale-90 items-center justify-center rounded-full bg-gradient-to-b from-accent-light to-accent text-background opacity-0 shadow-[0_10px_26px_rgba(255,106,0,0.55)] transition-all duration-200 group-hover:scale-100 group-hover:opacity-100">
           <svg aria-hidden="true" viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M3 4.5h6a3 3 0 0 1 3 3v12a2.4 2.4 0 0 0-2.4-2.4H3z" />

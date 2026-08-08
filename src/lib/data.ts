@@ -343,6 +343,12 @@ export type DailyTopic = {
   tags: string[];
 };
 
+export type DailyGroupStat = {
+  name: string;
+  message_count: number;
+  active_users: number;
+};
+
 export type DailyReport = {
   date: string;
   title: string;
@@ -350,6 +356,8 @@ export type DailyReport = {
   stats: {
     total_messages: number;
     active_members: number;
+    // Older content bundles predate the per-group breakdown.
+    groups?: DailyGroupStat[];
   };
 };
 
