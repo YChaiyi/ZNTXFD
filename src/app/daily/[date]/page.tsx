@@ -89,7 +89,7 @@ function IssueSwitcher({
   const baseLink =
     "glass-card card-hover flex min-h-[72px] flex-col justify-center p-4 transition-all hover:-translate-y-0.5 hover:border-white/[0.16] hover:text-accent";
   const disabled =
-    "glass-card flex min-h-[72px] flex-col justify-center p-4 text-foreground-disabled";
+    "glass-card flex min-h-[72px] cursor-not-allowed select-none flex-col justify-center p-4 text-foreground-disabled opacity-60";
 
   return (
     <nav
@@ -111,20 +111,21 @@ function IssueSwitcher({
           </span>
         </Link>
       ) : (
-        <span className={`${disabled} text-left text-sm md:text-base`}>
-          ← 上一期
+        <span aria-disabled="true" className={`${disabled} text-left text-sm md:text-base`}>
+          <span>← 上一期</span>
+          <span className="mt-1 text-xs md:text-sm">已是最早一期</span>
         </span>
       )}
 
-      <Link
-        href="/daily"
-        className="glass-card card-hover flex min-h-[72px] w-24 flex-col items-center justify-center p-3 text-center text-sm font-semibold text-foreground hover:border-white/[0.16] hover:text-accent md:w-36 md:text-base"
+      <span
+        aria-current="page"
+        className="glass-card flex min-h-[72px] w-24 flex-col items-center justify-center p-3 text-center text-sm font-semibold text-foreground md:w-36 md:text-base"
       >
         <span>本期</span>
         <span className="mono-num mt-1 text-xs text-foreground-muted md:text-sm">
           {formatDate(currentDate)}
         </span>
-      </Link>
+      </span>
 
       {nextDate ? (
         <Link
@@ -137,8 +138,9 @@ function IssueSwitcher({
           </span>
         </Link>
       ) : (
-        <span className={`${disabled} text-right text-sm md:text-base`}>
-          下一期 →
+        <span aria-disabled="true" className={`${disabled} text-right text-sm md:text-base`}>
+          <span>下一期 →</span>
+          <span className="mt-1 text-xs md:text-sm">已是最新一期</span>
         </span>
       )}
     </nav>
@@ -161,7 +163,7 @@ export default async function DailyPage({ params }: DailyPageProps) {
   const digestValue =
     images.length > 0 ? `${readyImages.length}/${images.length}` : "未纳入";
   const digestReadyLabel =
-    images.length > 0 ? `${readyImages.length}/${images.length} 已就绪` : "未纳入";
+    images.length > 0 ? `${readyImages.length}/${images.length} 群已归档` : "未纳入";
   const reportNeedsRefine = isRawishReport(report);
   const dateIndex = allDates.indexOf(date);
   const previousDate = dateIndex > 0 ? allDates[dateIndex - 1] : null;
@@ -175,7 +177,7 @@ export default async function DailyPage({ params }: DailyPageProps) {
       label: "群精华",
       value: digestValue,
       type: "groups" as const,
-      tone: images.length > 0 ? "text-accent" : "text-foreground-disabled",
+      tone: images.length > 0 ? "text-accent" : "text-foreground-muted",
     },
     {
       label: "消息数",
@@ -190,7 +192,7 @@ export default async function DailyPage({ params }: DailyPageProps) {
       tone: "text-purple",
     },
     {
-      label: "弹药索引",
+      label: "本期索引",
       value: report.topics.length,
       type: "topics" as const,
       tone: "text-pink",
@@ -270,7 +272,8 @@ export default async function DailyPage({ params }: DailyPageProps) {
             {images.map((img) => (
               <div
                 key={img.key}
-                className={`glass-card card-hover overflow-hidden hover:border-white/[0.14] ${
+                id={`digest-${img.key}`}
+                className={`glass-card card-hover scroll-mt-24 overflow-hidden hover:border-white/[0.14] ${
                   img.exists ? "" : "border-danger/20 bg-danger/[0.04]"
                 }`}
               >
@@ -320,7 +323,7 @@ export default async function DailyPage({ params }: DailyPageProps) {
       <section className="relative">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-xl font-bold text-foreground">本期弹药索引</h2>
+            <h2 className="text-xl font-bold text-foreground">本期索引</h2>
             <p className="mt-1 text-sm text-foreground-muted">
               用来快速定位本期出现的观点、工具、教程、案例和风险提醒。
             </p>

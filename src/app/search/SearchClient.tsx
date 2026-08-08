@@ -149,7 +149,7 @@ export function SearchClient({ searchIndex }: SearchClientProps) {
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground md:text-3xl">
-            搜索弹药
+            搜索
           </h1>
           <p className="mt-2 text-sm text-foreground-muted">
             搜索全部期刊的话题、工具、标签和核心观点
@@ -160,7 +160,7 @@ export function SearchClient({ searchIndex }: SearchClientProps) {
         </span>
       </div>
 
-      <div className="glass-card mb-5 p-4 md:p-6">
+      <div className="glass-card mb-5 p-4 transition-colors focus-within:border-accent/60 md:p-6">
         <label className="flex items-center gap-3">
           <SearchIcon className="h-5 w-5 shrink-0 text-accent" />
           <span className="sr-only">搜索关键词</span>

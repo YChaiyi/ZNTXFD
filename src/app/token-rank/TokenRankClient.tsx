@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { formatCount } from "@/lib/format";
 import type { TokenRankData, TokenRankEntry } from "@/lib/data";
 import { replaceLegacyTokenRankOrigin } from "@/lib/tokenRankInstall";
 
@@ -108,9 +109,7 @@ const toolColors: Record<string, string> = {
 };
 
 function formatTokens(value: number) {
-  if (value >= 100000000) return `${(value / 100000000).toFixed(2)}亿`;
-  if (value >= 10000) return `${(value / 10000).toFixed(1)}万`;
-  return Math.round(value).toLocaleString("zh-CN");
+  return formatCount(value);
 }
 
 function formatUsd(value: number) {

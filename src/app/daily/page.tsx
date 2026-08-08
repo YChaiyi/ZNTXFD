@@ -44,13 +44,13 @@ export default function DailyListPage() {
           {cards.map((card) => {
             const status = getDigestStatus(card.date);
             const digestLabel = status.available
-              ? `${status.readyCount}/${status.totalCount}`
+              ? `${status.readyCount}/${status.totalCount} 群已归档`
               : "未纳入";
             return (
-              <Link
+              <article
                 key={card.date}
-                href={`/daily/${card.date}`}
-                className="glass-card card-hover group flex min-h-[210px] flex-col p-5 hover:border-white/[0.14]"
+                data-archive-card
+                className="glass-card card-hover group relative flex min-h-[210px] flex-col p-5 hover:border-white/[0.14]"
               >
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <time className="mono-num text-xs text-foreground-muted">
@@ -59,7 +59,7 @@ export default function DailyListPage() {
                   <span
                     className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
                       !status.available
-                        ? "bg-white/[0.05] text-foreground-disabled"
+                        ? "bg-white/[0.05] text-foreground-muted"
                         : status.complete
                         ? "bg-success/10 text-success"
                         : "bg-accent/10 text-accent"
@@ -69,8 +69,14 @@ export default function DailyListPage() {
                   </span>
                 </div>
 
-                <h2 className="line-clamp-2 text-base font-bold leading-7 text-foreground transition-colors group-hover:text-accent">
-                  {card.title}
+                <h2 className="line-clamp-2 text-base font-bold leading-7">
+                  <Link
+                    href={`/daily/${card.date}`}
+                    aria-label={`${card.title}（${formatDate(card.date)}）`}
+                    className="text-foreground transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-accent"
+                  >
+                    {card.title}
+                  </Link>
                 </h2>
 
                 <div className="mt-4 flex flex-wrap gap-2">
@@ -84,22 +90,22 @@ export default function DailyListPage() {
                     <span className="mono-num block font-semibold text-accent">
                       {card.total_messages}
                     </span>
-                    <span className="text-foreground-disabled">消息</span>
+                    <span className="text-foreground-muted">消息</span>
                   </span>
                   <span>
                     <span className="mono-num block font-semibold text-accent">
                       {card.topic_count}
                     </span>
-                    <span className="text-foreground-disabled">弹药</span>
+                    <span className="text-foreground-muted">话题</span>
                   </span>
                   <span>
                     <span className="mono-num block font-semibold text-accent">
                       {card.active_members}
                     </span>
-                    <span className="text-foreground-disabled">成员</span>
+                    <span className="text-foreground-muted">成员</span>
                   </span>
                 </div>
-              </Link>
+              </article>
             );
           })}
         </div>
