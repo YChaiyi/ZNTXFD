@@ -773,6 +773,70 @@ test("leaderboard aggregate covers every member and keeps total separate from no
   assert.notEqual(board.aggregate.total, board.aggregate.norm);
 });
 
+test("leaderboard range aliases resolve to the correct Beijing calendar day", async (t) => {
+  const { store } = await setupStore(t);
+  const today = beijingDate();
+  const yesterday = addDays(today, -1);
+  const dayBefore = addDays(today, -2);
+  const { token, user } = await store.createTokenRankUser({ name: "range-alias" });
+
+  await store.appendTokenRankUsage(token, {
+    deviceId: DEVICE_A,
+    clientVersion: "0.1.0",
+    records: [
+      {
+        date: today,
+        tool: "claude-code",
+        model: "today-model",
+        inputTokens: 10,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 10,
+      },
+      {
+        date: yesterday,
+        tool: "claude-code",
+        model: "yesterday-model",
+        inputTokens: 20,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 20,
+      },
+      {
+        date: dayBefore,
+        tool: "claude-code",
+        model: "day-before-model",
+        inputTokens: 30,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 30,
+      },
+    ],
+  });
+
+  const todayBoard = await store.getTokenRankLeaderboard({ range: "today" });
+  const yesterdayBoard = await store.getTokenRankLeaderboard({ range: "yesterday" });
+  const canonical = await store.getTokenRankLeaderboard({ range: "day-before" });
+  const alias = await store.getTokenRankLeaderboard({ range: "day-before-yesterday" });
+  const score = (board) => board.entries.find((entry) => entry.userId === user.userId)?.score;
+
+  assert.equal(score(todayBoard), 10);
+  assert.equal(score(yesterdayBoard), 20);
+  assert.equal(score(canonical), 30);
+  assert.equal(score(alias), 30);
+  assert.equal(alias.range, "day-before");
+});
+
+test("leaderboard range normalization rejects unknown API ranges", async (t) => {
+  const { store } = await setupStore(t);
+  assert.equal(store.normalizeTokenRankRange("day-before-yesterday"), "day-before");
+  assert.equal(store.normalizeTokenRankRange("before-yesterday"), null);
+  assert.equal(store.normalizeTokenRankRange("invalid"), null);
+});
+
 test("public profiles expose active legacy identities with complete sanitized aggregates", async (t) => {
   const { store, storePath } = await setupStore(t);
   const { token, user } = await store.createTokenRankUser({ name: "public-profile", role: "测试角色" });

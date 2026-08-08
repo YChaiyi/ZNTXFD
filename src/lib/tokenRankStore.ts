@@ -340,7 +340,24 @@ function addDays(date: string, offset: number) {
   return new Date(time).toISOString().slice(0, 10);
 }
 
-function dateRange(range: string) {
+export type TokenRankRangeKey = "today" | "yesterday" | "day-before" | "3d" | "7d" | "30d";
+
+export function normalizeTokenRankRange(value: string): TokenRankRangeKey | null {
+  if (value === "day-before-yesterday") return "day-before";
+  if (
+    value === "today" ||
+    value === "yesterday" ||
+    value === "day-before" ||
+    value === "3d" ||
+    value === "7d" ||
+    value === "30d"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function dateRange(range: TokenRankRangeKey) {
   const today = beijingDate();
   if (range === "yesterday") return { start: addDays(today, -1), end: addDays(today, -1) };
   if (range === "day-before") return { start: addDays(today, -2), end: addDays(today, -2) };
@@ -1048,7 +1065,7 @@ export async function getTokenRankLeaderboard(params: {
 }) {
   const store = await readStore();
   const board = params.board || "total";
-  const range = params.range || "today";
+  const range = normalizeTokenRankRange(params.range || "today") ?? "today";
   const metric = params.metric || "total";
   const { start, end } = dateRange(range);
   const records = store.records.filter((record) => record.date >= start && record.date <= end);
