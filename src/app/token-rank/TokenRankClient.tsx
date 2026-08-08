@@ -141,6 +141,10 @@ function metricScore(entry: RankedEntry, metric: MetricKey) {
   return entry.displayScore;
 }
 
+function leaderboardRequestKey(board: string, range: string, metric: MetricKey) {
+  return `${board}:${range}:${metric}`;
+}
+
 function buildRankedEntries(
   entries: TokenRankEntry[],
   board: string,
@@ -299,6 +303,7 @@ function LeaderboardView({
   setActiveMetric,
   setActiveTab,
   isRefreshing,
+  selectionState,
 }: {
   data: TokenRankData;
   activeBoard: string;
@@ -309,6 +314,7 @@ function LeaderboardView({
   setActiveMetric: (value: MetricKey) => void;
   setActiveTab: (value: TabKey) => void;
   isRefreshing: boolean;
+  selectionState: "ready" | "loading" | "error";
 }) {
   const rankedEntries = useMemo(
     () => buildRankedEntries(data.entries, activeBoard, activeMetric),
@@ -323,6 +329,7 @@ function LeaderboardView({
   const myRank = rankedEntries.find((entry) => entry.userId === data.mySummary.userId);
   const rangeLabel = data.ranges.find((range) => range.key === activeRange)?.label ?? "今天";
   const boardLabel = data.boards.find((board) => board.key === activeBoard)?.label ?? "总榜";
+  const selectionReady = selectionState === "ready";
 
   return (
     <div className="space-y-5">
@@ -360,11 +367,21 @@ function LeaderboardView({
           <div className="mt-5 grid grid-cols-2 gap-3">
             <StatTile label="参与人数" value={`${data.totalMembers}`} tone="text-accent" />
             <StatTile label="上榜工具" value={`${data.boards.length - 1}`} tone="text-success" />
-            <StatTile label="总消耗" value={formatTokens(totalTokens)} tone="text-purple" />
-            <StatTile label="预估费用" value={formatUsd(totalCost)} tone="text-pink" />
+            <StatTile
+              label="总消耗"
+              value={selectionReady ? formatTokens(totalTokens) : "--"}
+              tone="text-purple"
+            />
+            <StatTile
+              label="预估费用"
+              value={selectionReady ? formatUsd(totalCost) : "--"}
+              tone="text-pink"
+            />
           </div>
           <p className="mt-4 text-xs leading-6 text-foreground-muted">
-            最近同步 {data.updatedAt} · 每 {data.syncIntervalMinutes} 分钟更新一次{isRefreshing ? " · 正在刷新" : ""}。
+            {selectionReady ? `最近同步 ${data.updatedAt}` : `正在加载${rangeLabel}${boardLabel}`}
+            {selectionReady ? ` · 每 ${data.syncIntervalMinutes} 分钟更新一次` : ""}
+            {isRefreshing ? " · 正在刷新" : ""}。
           </p>
         </aside>
       </section>
@@ -414,7 +431,7 @@ function LeaderboardView({
         </div>
       </section>
 
-      {myRank ? (
+      {selectionReady && myRank ? (
         <section className="rounded-[16px] border border-accent/20 bg-accent/[0.07] p-4">
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-sm font-bold text-foreground">我的{rangeLabel}{boardLabel}排名</span>
@@ -435,16 +452,27 @@ function LeaderboardView({
             {rangeLabel}{boardLabel} Top 20
           </h2>
           <p className="text-sm text-foreground-muted">
-            全员累计 {activeMetric === "cost"
+            {selectionReady ? `全员累计 ${activeMetric === "cost"
               ? `≈${formatUsd(totalCost)}`
-              : `${formatTokens(activeMetric === "norm" ? totalNorm : totalTokens)} tokens`}
+              : `${formatTokens(activeMetric === "norm" ? totalNorm : totalTokens)} tokens`}` : "正在加载真实数据"}
           </p>
           <p className="w-full text-sm text-foreground-muted">
             点击昵称、头像或“查看主页”可查看完整统计。
           </p>
         </div>
 
-        {rankedEntries.length === 0 ? (
+        {!selectionReady ? (
+          <div className="glass-card p-8 text-center">
+            <h3 className="text-xl font-bold text-foreground">
+              {selectionState === "error" ? "榜单加载失败" : "正在加载榜单"}
+            </h3>
+            <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-foreground-muted">
+              {selectionState === "error"
+                ? "没有显示其他日期的旧数据。请稍后重试。"
+                : `正在获取${rangeLabel}${boardLabel}的真实统计。`}
+            </p>
+          </div>
+        ) : rankedEntries.length === 0 ? (
           <div className="glass-card p-8 text-center">
             <h3 className="text-xl font-bold text-foreground">暂无真实上榜数据</h3>
             <p className="mx-auto mt-3 max-w-2xl text-sm leading-7 text-foreground-muted">
@@ -1042,12 +1070,21 @@ export function TokenRankClient({ data }: { data: TokenRankData }) {
   const [activeMetric, setActiveMetric] = useState<MetricKey>("total");
   const [leaderboardData, setLeaderboardData] = useState(data);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadedRequestKey, setLoadedRequestKey] = useState(
+    leaderboardRequestKey("total", "today", "total"),
+  );
+  const [failedRequestKey, setFailedRequestKey] = useState<string | null>(null);
+  const requestKey = leaderboardRequestKey(activeBoard, activeRange, activeMetric);
+  const selectionState = loadedRequestKey === requestKey
+    ? "ready"
+    : failedRequestKey === requestKey ? "error" : "loading";
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function refreshLeaderboard() {
       setIsRefreshing(true);
+      setFailedRequestKey(null);
       try {
         const params = new URLSearchParams({
           board: activeBoard,
@@ -1065,7 +1102,10 @@ export function TokenRankClient({ data }: { data: TokenRankData }) {
           aggregate?: TokenRankData["aggregate"];
         };
 
-        if (!response.ok || body.status !== 0 || !Array.isArray(body.entries)) return;
+        if (!response.ok || body.status !== 0 || !Array.isArray(body.entries)) {
+          setFailedRequestKey(requestKey);
+          return;
+        }
 
         setLeaderboardData((current) => ({
           ...current,
@@ -1074,8 +1114,10 @@ export function TokenRankClient({ data }: { data: TokenRankData }) {
           updatedAt: body.updatedAt ?? current.updatedAt,
           aggregate: body.aggregate ?? current.aggregate,
         }));
+        setLoadedRequestKey(requestKey);
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") return;
+        setFailedRequestKey(requestKey);
       } finally {
         if (!controller.signal.aborted) setIsRefreshing(false);
       }
@@ -1088,7 +1130,7 @@ export function TokenRankClient({ data }: { data: TokenRankData }) {
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [activeBoard, activeMetric, activeRange, data.syncIntervalMinutes]);
+  }, [activeBoard, activeMetric, activeRange, data.syncIntervalMinutes, requestKey]);
 
   return (
     <section className="space-y-5">
@@ -1120,6 +1162,7 @@ export function TokenRankClient({ data }: { data: TokenRankData }) {
           setActiveMetric={setActiveMetric}
           setActiveTab={setActiveTab}
           isRefreshing={isRefreshing}
+          selectionState={selectionState}
         />
       ) : null}
       {activeTab === "connect" ? <ConnectView data={data} /> : null}
