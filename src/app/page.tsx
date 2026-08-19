@@ -42,6 +42,11 @@ function compactNumber(value: number) {
   return value.toLocaleString("zh-CN");
 }
 
+function formatGroupCount(value: number) {
+  const labels = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
+  return labels[value] ?? String(value);
+}
+
 function buildAssetStats(cards: DailyIndexItem[], reports: DailyReport[]): AssetStats {
   const tools = new Set<string>();
   const contributors = new Set<string>();
@@ -349,7 +354,7 @@ export default async function Home() {
 
               <section>
                 <SectionTitle
-                  title="今日五群精华"
+                  title={`今日${formatGroupCount(digestStatus.totalCount)}群精华`}
                   meta={formatDate(latest.date)}
                   href={`/daily/${latest.date}`}
                   cta="全部日报 →"

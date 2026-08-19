@@ -566,6 +566,12 @@ export const DIGEST_GROUPS: DigestGroup[] = [
     name: "智能体先锋队五群",
     activeFrom: "2026-07-15",
   },
+  {
+    key: "group6",
+    label: "六群",
+    name: "智能体先锋队六群",
+    activeFrom: "2026-08-16",
+  },
 ];
 
 export function getDailyIndex(): DailyIndexItem[] {
