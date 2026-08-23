@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 
-const VERSION = "0.2.4";
+const VERSION = "0.2.5";
 const CONFIG_DIR = process.env.ZNT_TOKENRANK_HOME || path.join(os.homedir(), ".znt-tokenrank");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 const CODEX_CACHE_PATH = path.join(CONFIG_DIR, "codex-usage-cache-v7.json.gz");
@@ -18,6 +19,8 @@ const MAX_FILE_SIZE = 8 * 1024 * 1024;
 const MAX_FILES_PER_TOOL = 320;
 const LOOKBACK_MS = 35 * 24 * 60 * 60 * 1000;
 const UUID_SUFFIX_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.jsonl$/i;
+const OPENCODE_MIN_VERSION = [1, 18, 18];
+const OPENCODE_MAX_VERSION = [1, 18, 21];
 
 const CODEX_DIRS = ["~/.codex/sessions", "~/.codex/archived_sessions"];
 
@@ -27,7 +30,6 @@ const TOOL_SOURCES = [
   { tool: "gemini", dirs: ["~/.gemini"] },
   { tool: "kimi", dirs: ["~/.kimi", "~/Library/Application Support/Kimi"] },
   { tool: "qwen", dirs: ["~/.qwen"] },
-  { tool: "opencode", dirs: ["~/.opencode"] },
   { tool: "cline", dirs: ["~/Library/Application Support/Code/User/globalStorage", "~/Library/Application Support/Cursor/User/globalStorage"] },
   { tool: "roo-code", dirs: ["~/Library/Application Support/Code/User/globalStorage", "~/Library/Application Support/Cursor/User/globalStorage"] },
   { tool: "kilo-code", dirs: ["~/Library/Application Support/Code/User/globalStorage", "~/Library/Application Support/Cursor/User/globalStorage"] },
@@ -124,6 +126,340 @@ export function selectCodexBackfillRecords(records, nowMs = Date.now()) {
 
 function beijingDayStartMs(date) {
   return Date.parse(`${date}T00:00:00Z`) - 8 * 60 * 60 * 1000;
+}
+
+export function openCodeExecutableCandidates(
+  platform = process.platform,
+  environment = process.env,
+  home = os.homedir(),
+) {
+  const windows = platform === "win32";
+  const pathModule = windows ? path.win32 : path;
+  return [...new Set([
+    environment.OPENCODE_BIN?.trim(),
+    pathModule.join(home, ".opencode", "bin", windows ? "opencode.exe" : "opencode"),
+    pathModule.join(home, ".local", "bin", windows ? "opencode.exe" : "opencode"),
+    ...(windows
+      ? [
+          environment.APPDATA && pathModule.join(environment.APPDATA, "npm", "opencode.cmd"),
+          "opencode.exe",
+          "opencode.cmd",
+          "opencode",
+        ]
+      : ["/opt/homebrew/bin/opencode", "/usr/local/bin/opencode"]),
+    ...(windows ? [] : ["opencode"]),
+  ].filter(Boolean))];
+}
+
+function openCodeDatabaseCandidates() {
+  const dataRoots = [...new Set([
+    process.env.XDG_DATA_HOME && path.join(process.env.XDG_DATA_HOME, "opencode"),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "opencode"),
+    path.join(os.homedir(), ".local", "share", "opencode"),
+    path.join(os.homedir(), "Library", "Application Support", "opencode"),
+  ].filter(Boolean))];
+  const configured = process.env.OPENCODE_DB?.trim();
+  const candidates = [];
+
+  if (configured && configured !== ":memory:") {
+    candidates.push(path.isAbsolute(configured) ? configured : path.join(dataRoots[0], configured));
+  }
+  for (const root of dataRoots) {
+    try {
+      for (const name of fs.readdirSync(root)) {
+        if (/^opencode(?:-[A-Za-z0-9._-]+)?\.db$/.test(name)) candidates.push(path.join(root, name));
+      }
+    } catch {
+      // OpenCode is optional; an absent data directory is not an error.
+    }
+  }
+  return [...new Set(candidates)];
+}
+
+function openCodeCounter(value) {
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number) || number <= 0) return 0;
+  const rounded = Math.round(number);
+  return Number.isSafeInteger(rounded) ? rounded : 0;
+}
+
+function supportedOpenCodeVersion(value) {
+  const match = String(value || "").trim().match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return false;
+  const version = match.slice(1).map(Number);
+  const compare = (boundary) => {
+    for (let index = 0; index < version.length; index += 1) {
+      if (version[index] !== boundary[index]) return version[index] - boundary[index];
+    }
+    return 0;
+  };
+  return compare(OPENCODE_MIN_VERSION) >= 0 && compare(OPENCODE_MAX_VERSION) <= 0;
+}
+
+export function openCodeRecordsFromRows(rows) {
+  if (!Array.isArray(rows)) return [];
+
+  return rows.flatMap((row) => {
+    const date = typeof row?.date === "string" ? row.date : "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+
+    const rawModel = String(row?.model || "unknown").trim() || "unknown";
+    const model = rawModel.slice(0, 128);
+    const inputTokens = openCodeCounter(row?.input_tokens);
+    const outputTokens = openCodeCounter(row?.output_tokens)
+      + openCodeCounter(row?.reasoning_tokens);
+    const cacheReadTokens = openCodeCounter(row?.cache_read_tokens);
+    const cacheWriteTokens = openCodeCounter(row?.cache_write_tokens);
+    const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+    if (!Number.isSafeInteger(totalTokens) || totalTokens <= 0) return [];
+
+    return [{
+      date,
+      tool: "opencode",
+      model,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      totalTokens,
+      inputTokenSemantics: "fresh",
+    }];
+  });
+}
+
+export function openCodeUsageQuery(nowMs = Date.now()) {
+  const endDate = todayFromTime(nowMs);
+  const startDate = addDays(endDate, -(HISTORY_DAYS - 1));
+  const startMs = beijingDayStartMs(startDate);
+  return `
+WITH assistant_usage AS (
+  SELECT DISTINCT
+    json_remove(data, '$.parentID') AS fingerprint,
+    json_extract(data, '$.time.completed') AS usage_time,
+    substr(coalesce(nullif(trim(json_extract(data, '$.modelID')), ''), 'unknown'), 1, 128) AS model,
+    coalesce(json_extract(data, '$.tokens.input'), 0) AS input_tokens,
+    coalesce(json_extract(data, '$.tokens.output'), 0) AS output_tokens,
+    coalesce(json_extract(data, '$.tokens.reasoning'), 0) AS reasoning_tokens,
+    coalesce(json_extract(data, '$.tokens.cache.read'), 0) AS cache_read_tokens,
+    coalesce(json_extract(data, '$.tokens.cache.write'), 0) AS cache_write_tokens
+  FROM message
+  WHERE json_extract(data, '$.role') = 'assistant'
+    AND json_type(data, '$.time.completed') IN ('integer', 'real')
+)
+SELECT
+  strftime('%Y-%m-%d', usage_time / 1000, 'unixepoch', '+8 hours') AS date,
+  model,
+  sum(input_tokens) AS input_tokens,
+  sum(output_tokens) AS output_tokens,
+  sum(reasoning_tokens) AS reasoning_tokens,
+  sum(cache_read_tokens) AS cache_read_tokens,
+  sum(cache_write_tokens) AS cache_write_tokens,
+  (SELECT file FROM pragma_database_list WHERE name = 'main') AS database_path,
+  0 AS assistant_rows,
+  0 AS token_rows,
+  0 AS unsupported_rows
+FROM assistant_usage
+WHERE usage_time >= ${startMs}
+  AND usage_time <= ${nowMs}
+GROUP BY date, model
+UNION ALL
+SELECT
+  NULL AS date,
+  NULL AS model,
+  0 AS input_tokens,
+  0 AS output_tokens,
+  0 AS reasoning_tokens,
+  0 AS cache_read_tokens,
+  0 AS cache_write_tokens,
+  file AS database_path,
+  (SELECT count(*) FROM message WHERE json_extract(data, '$.role') = 'assistant') AS assistant_rows,
+  (SELECT count(*) FROM message
+    WHERE json_extract(data, '$.role') = 'assistant'
+      AND json_type(data, '$.time.completed') = 'integer'
+      AND json_type(data, '$.tokens.total') = 'integer'
+      AND json_type(data, '$.tokens.input') = 'integer'
+      AND json_type(data, '$.tokens.output') = 'integer'
+      AND json_type(data, '$.tokens.reasoning') = 'integer'
+      AND json_type(data, '$.tokens.cache.read') = 'integer'
+      AND json_type(data, '$.tokens.cache.write') = 'integer'
+      AND json_extract(data, '$.tokens.total') > 0
+      AND json_extract(data, '$.tokens.input') >= 0
+      AND json_extract(data, '$.tokens.output') >= 0
+      AND json_extract(data, '$.tokens.reasoning') >= 0
+      AND json_extract(data, '$.tokens.cache.read') >= 0
+      AND json_extract(data, '$.tokens.cache.write') >= 0
+      AND json_extract(data, '$.tokens.total') =
+        json_extract(data, '$.tokens.input')
+        + json_extract(data, '$.tokens.output')
+        + json_extract(data, '$.tokens.reasoning')
+        + json_extract(data, '$.tokens.cache.read')
+        + json_extract(data, '$.tokens.cache.write')) AS token_rows,
+  (SELECT count(*) FROM message
+    WHERE (
+      json_extract(data, '$.role') = 'assistant'
+      OR json_type(data, '$.tokens') = 'object'
+    )
+      AND NOT coalesce((
+        json_extract(data, '$.role') = 'assistant'
+        AND json_type(data, '$.time.completed') = 'integer'
+        AND json_type(data, '$.tokens.total') = 'integer'
+        AND json_type(data, '$.tokens.input') = 'integer'
+        AND json_type(data, '$.tokens.output') = 'integer'
+        AND json_type(data, '$.tokens.reasoning') = 'integer'
+        AND json_type(data, '$.tokens.cache.read') = 'integer'
+        AND json_type(data, '$.tokens.cache.write') = 'integer'
+        AND json_extract(data, '$.tokens.total') > 0
+        AND json_extract(data, '$.tokens.input') >= 0
+        AND json_extract(data, '$.tokens.output') >= 0
+        AND json_extract(data, '$.tokens.reasoning') >= 0
+        AND json_extract(data, '$.tokens.cache.read') >= 0
+        AND json_extract(data, '$.tokens.cache.write') >= 0
+        AND json_extract(data, '$.tokens.total') =
+          json_extract(data, '$.tokens.input')
+          + json_extract(data, '$.tokens.output')
+          + json_extract(data, '$.tokens.reasoning')
+          + json_extract(data, '$.tokens.cache.read')
+          + json_extract(data, '$.tokens.cache.write')
+      ) OR (
+        json_extract(data, '$.role') = 'assistant'
+        AND json_type(data, '$.tokens.input') = 'integer'
+        AND json_type(data, '$.tokens.output') = 'integer'
+        AND json_type(data, '$.tokens.reasoning') = 'integer'
+        AND json_type(data, '$.tokens.cache.read') = 'integer'
+        AND json_type(data, '$.tokens.cache.write') = 'integer'
+        AND json_extract(data, '$.tokens.input') = 0
+        AND json_extract(data, '$.tokens.output') = 0
+        AND json_extract(data, '$.tokens.reasoning') = 0
+        AND json_extract(data, '$.tokens.cache.read') = 0
+        AND json_extract(data, '$.tokens.cache.write') = 0
+        AND (
+          json_type(data, '$.tokens.total') IS NULL
+          OR (
+            json_type(data, '$.tokens.total') = 'integer'
+            AND json_extract(data, '$.tokens.total') = 0
+          )
+        )
+      ), 0)) AS unsupported_rows
+FROM pragma_database_list
+WHERE name = 'main'
+ORDER BY date, model
+`.trim();
+}
+
+function runOpenCodeCommand(executable, args) {
+  const options = {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    timeout: 30_000,
+    windowsHide: true,
+  };
+  if (process.platform === "win32" && !executable.toLowerCase().endsWith(".exe")) {
+    return spawnSync("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$arguments = @(ConvertFrom-Json $env:ZNT_OPENCODE_ARGUMENTS); "
+        + "& $env:ZNT_OPENCODE_EXECUTABLE @arguments; exit $LASTEXITCODE",
+    ], {
+      ...options,
+      env: {
+        ...process.env,
+        ZNT_OPENCODE_EXECUTABLE: executable,
+        ZNT_OPENCODE_ARGUMENTS: JSON.stringify(args),
+      },
+    });
+  }
+  return spawnSync(executable, args, options);
+}
+
+export function collectOpenCode(
+  nowMs = Date.now(),
+  executables = openCodeExecutableCandidates(),
+  databaseCandidates = openCodeDatabaseCandidates(),
+) {
+  const expectedDatabases = new Set(
+    databaseCandidates
+      .filter((file) => fs.existsSync(file))
+      .map(canonicalFilePath),
+  );
+  const sourceFound = expectedDatabases.size > 0;
+  if (!sourceFound) return { sourceFound: false, complete: false, records: [] };
+
+  const query = openCodeUsageQuery(nowMs);
+  let failure = "";
+
+  for (const executable of executables) {
+    if (path.isAbsolute(executable) && !fs.existsSync(executable)) continue;
+    const versionResult = runOpenCodeCommand(executable, ["--version"]);
+    if (versionResult.error?.code === "ENOENT") continue;
+    if (versionResult.error || versionResult.status !== 0) {
+      failure = versionResult.error?.message || versionResult.stderr || `exit ${versionResult.status}`;
+      continue;
+    }
+    const openCodeVersion = versionResult.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) || "";
+    if (!supportedOpenCodeVersion(openCodeVersion)) {
+      failure = `OpenCode ${openCodeVersion || "未知版本"} 尚未验证兼容性`;
+      continue;
+    }
+
+    const pathResult = runOpenCodeCommand(executable, ["db", "path"]);
+    if (pathResult.error?.code === "ENOENT") continue;
+    if (pathResult.error || pathResult.status !== 0) {
+      failure = pathResult.error?.message || pathResult.stderr || `exit ${pathResult.status}`;
+      continue;
+    }
+    const reportedPath = pathResult.stdout.trim().split(/\r?\n/).filter(Boolean).at(-1) || "";
+    if (!reportedPath || !expectedDatabases.has(canonicalFilePath(reportedPath))) {
+      failure = "OpenCode CLI 报告的数据库不在已发现的数据文件中";
+      continue;
+    }
+
+    const result = runOpenCodeCommand(executable, ["db", query, "--format", "json"]);
+    if (result.error?.code === "ENOENT") continue;
+    if (result.error || result.status !== 0) {
+      failure = result.error?.message || result.stderr || `exit ${result.status}`;
+      continue;
+    }
+
+    try {
+      const rows = JSON.parse(result.stdout);
+      const metadata = Array.isArray(rows)
+        ? rows.find((row) => row?.date === null && typeof row?.database_path === "string")
+        : null;
+      const queriedDatabases = new Set(
+        (Array.isArray(rows) ? rows : [])
+          .map((row) => typeof row?.database_path === "string" ? row.database_path : "")
+          .filter(Boolean)
+          .map(canonicalFilePath),
+      );
+      if (
+        queriedDatabases.size !== 1
+        || [...queriedDatabases][0] !== canonicalFilePath(reportedPath)
+      ) {
+        failure = "OpenCode CLI 查询的数据库与已发现的数据文件不一致";
+        continue;
+      }
+      if (
+        !metadata
+        || openCodeCounter(metadata.unsupported_rows) > 0
+        || openCodeCounter(metadata.token_rows) === 0
+      ) {
+        failure = "OpenCode 数据库存在无法安全统计的用量记录";
+        continue;
+      }
+      return {
+        sourceFound: true,
+        complete: true,
+        records: openCodeRecordsFromRows(rows),
+      };
+    } catch (error) {
+      failure = `无法解析 OpenCode 数据库输出：${error.message}`;
+    }
+  }
+
+  failure ||= "找不到可执行的 OpenCode CLI";
+  if (failure) logWarning(`OpenCode 用量采集失败，本次跳过：${failure}`);
+  return { sourceFound: true, complete: false, records: [] };
 }
 
 function readConfig() {
@@ -1160,7 +1496,9 @@ async function main() {
   const rebuildHistoryRequested = process.argv.includes("--rebuild-history");
   const codexComplete = codexCollectionComplete(codex.diagnostics);
   const codexSourceFound = codexSourceAvailable(codex.diagnostics);
+  const openCode = collectOpenCode(cutoffMs);
   const records = codexSourceFound ? [...codex.records] : [];
+  if (openCode.complete) records.push(...openCode.records);
 
   for (const source of TOOL_SOURCES) {
     records.push(...collectTool(source));
@@ -1168,7 +1506,7 @@ async function main() {
 
   if (process.argv.includes("--dry-run")) {
     const targetDate = todayFromTime(cutoffMs);
-    const todayRecords = records.filter((record) => record.tool === "codex" && record.date === targetDate);
+    const todayRecords = records.filter((record) => record.date === targetDate);
     const totals = todayRecords.reduce(
       (sum, record) => ({
         inputTokens: sum.inputTokens + record.inputTokens,
@@ -1185,6 +1523,11 @@ async function main() {
       targetDate,
       historyWindow: codexHistoryWindow(cutoffMs),
       diagnostics: codex.diagnostics,
+      openCode: {
+        sourceFound: openCode.sourceFound,
+        complete: openCode.complete,
+        records: openCode.records.length,
+      },
       totals,
       ...(process.argv.includes("--summary") ? {} : { records }),
     }, null, 2));

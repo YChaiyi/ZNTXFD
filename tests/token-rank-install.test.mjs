@@ -235,8 +235,8 @@ test("the real installer rebuilds legacy Codex history twice without touching ot
     endpoint,
     "--no-schedule",
   ], { env: environment, timeout: 60_000 });
-  assert.match(first.stdout, /客户端版本：0\.2\.4/);
-  assert.match(first.stdout, /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+08:00\] \[znt-tokenrank 0\.2\.4\] znt-tokenrank synced/m);
+  assert.match(first.stdout, /客户端版本：0\.2\.5/);
+  assert.match(first.stdout, /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+08:00\] \[znt-tokenrank 0\.2\.5\] znt-tokenrank synced/m);
   assert.equal(uploads.length, 1);
   assert.equal(uploads[0].protocolVersion, 2);
   assert.equal(uploads[0].snapshot.complete, true);
@@ -260,7 +260,7 @@ test("the real installer rebuilds legacy Codex history twice without touching ot
     endpoint,
     "--no-schedule",
   ], { env: environment, timeout: 60_000 });
-  assert.match(second.stdout, /客户端版本：0\.2\.4/);
+  assert.match(second.stdout, /客户端版本：0\.2\.5/);
   assert.equal(uploads.length, 2);
   assert.equal(uploads[1].deviceId, DEVICE_ID);
 
@@ -411,7 +411,7 @@ test("the shell installer refuses a numeric semantic-version downgrade", async (
       timeout: 60_000,
     }),
     (error) => {
-      assert.match(error.stderr, /版本 0\.2\.4 低于已安装版本 0\.10\.0；已阻止降级/);
+      assert.match(error.stderr, /版本 0\.2\.5 低于已安装版本 0\.10\.0；已阻止降级/);
       assert.doesNotMatch(error.stderr, new RegExp(token));
       return true;
     },
@@ -615,7 +615,7 @@ test("an incomplete migrated history installs safely and retries the authoritati
   ], { env: environment, timeout: 60_000 });
 
   assert.match(first.stderr, /优先合并今日下界并安全补传最近历史缺口.*自动重试完整重建/);
-  assert.match(first.stdout, /客户端版本：0\.2\.4/);
+  assert.match(first.stdout, /客户端版本：0\.2\.5/);
   assert.equal(uploads.length, 2);
   assert.equal(uploads[0].records.some((record) => record.tool === "codex"), true);
   assert.equal(uploads[0].records.every((record) => record.tool !== "codex" || record.date === today), true);
@@ -696,9 +696,9 @@ test("a partial client reports an incompatible server with timestamped redacted 
       const lines = error.stderr.trim().split("\n");
       assert.ok(lines.length >= 2);
       assert.ok(lines.every((line) => (
-        /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+08:00\] \[znt-tokenrank 0\.2\.4\] /.test(line)
+        /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+08:00\] \[znt-tokenrank 0\.2\.5\] /.test(line)
       )));
-      assert.match(error.stderr, /服务端与客户端协议不兼容：客户端 0\.2\.4 需要 Token Rank v2 partial\/backfill 协议/);
+      assert.match(error.stderr, /服务端与客户端协议不兼容：客户端 0\.2\.5 需要 Token Rank v2 partial\/backfill 协议/);
       assert.match(error.stderr, /服务端返回 400/);
       assert.match(error.stderr, /\[REDACTED\]/);
       assert.doesNotMatch(error.stderr, new RegExp(token));
@@ -834,7 +834,7 @@ test("an older rollback server keeps the primary sync healthy and defers backfil
   assert.equal(uploads[1].codexMode, "partial-backfill");
   assert.match(result.stdout, /znt-tokenrank synced/);
   assert.match(result.stderr, /服务端当前不支持 Codex 历史补传；今日主同步已完成/);
-  assert.doesNotMatch(result.stderr, /\[znt-tokenrank 0\.2\.4\] 上报失败/);
+  assert.doesNotMatch(result.stderr, /\[znt-tokenrank 0\.2\.5\] 上报失败/);
   assert.equal(
     JSON.parse(fs.readFileSync(configPath, "utf8")).pendingCodexHistoryRebuild,
     true,
@@ -1033,7 +1033,7 @@ test("the installer completes scheduled setup under a UTF-8 locale", async (t) =
   });
 
   assert.equal(uploadAttempts, 1);
-  assert.match(result.stdout, /配置目录：.*\.znt-tokenrank。客户端版本：0\.2\.4/);
+  assert.match(result.stdout, /配置目录：.*\.znt-tokenrank。客户端版本：0\.2\.5/);
   assert.equal(fs.existsSync(path.join(home, "Library", "LaunchAgents", "group.znt.tokenrank.plist")), true);
 });
 

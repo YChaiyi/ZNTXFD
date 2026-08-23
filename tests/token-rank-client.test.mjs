@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
   aggregateCodexFiles,
   codexCollectionComplete,
   codexHistoryWindow,
+  collectOpenCode,
+  openCodeExecutableCandidates,
   parseCodexFile,
   selectCodexBackfillRecords,
 } from "../public/token-rank/client.mjs";
@@ -606,4 +609,283 @@ test("missing required cumulative counters make an authoritative scan incomplete
     unsupportedUsageEvents: 0,
     counterResets: 0,
   }), false);
+});
+
+test("OpenCode usage uses completion dates and removes copied fork history", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-opencode-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const databasePath = path.join(dir, "opencode.db");
+  const database = new DatabaseSync(databasePath);
+  database.exec(`
+    CREATE TABLE message (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      time_created INTEGER NOT NULL,
+      time_updated INTEGER NOT NULL,
+      data TEXT NOT NULL
+    )
+  `);
+  const insert = database.prepare(
+    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+  );
+  const crossingMidnight = {
+    parentID: "user-original",
+    role: "assistant",
+    modelID: "gpt-5.6-sol",
+    providerID: "private-proxy-name",
+    tokens: {
+      total: 562,
+      input: 120,
+      output: 30,
+      reasoning: 7,
+      cache: { read: 400, write: 5 },
+    },
+    time: {
+      created: Date.parse("2026-08-22T15:59:00.000Z"),
+      completed: Date.parse("2026-08-22T16:01:00.000Z"),
+    },
+  };
+  insert.run("original", "parent", crossingMidnight.time.created, crossingMidnight.time.completed, JSON.stringify(crossingMidnight));
+  insert.run("fork-copy", "child", crossingMidnight.time.created, crossingMidnight.time.completed, JSON.stringify({
+    ...crossingMidnight,
+    parentID: "cloned-user-message",
+  }));
+  const priorDay = {
+    ...crossingMidnight,
+    parentID: "prior-user",
+    tokens: {
+      total: 33,
+      input: 10,
+      output: 2,
+      reasoning: 1,
+      cache: { read: 20, write: 0 },
+    },
+    time: {
+      created: Date.parse("2026-08-22T15:58:00.000Z"),
+      completed: Date.parse("2026-08-22T15:59:00.000Z"),
+    },
+  };
+  insert.run("prior", "parent", priorDay.time.created, priorDay.time.completed, JSON.stringify(priorDay));
+  database.close();
+
+  const executable = path.join(dir, "opencode");
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+const { DatabaseSync } = require("node:sqlite");
+if (process.argv[2] === "--version") {
+  console.log("1.18.21");
+  process.exit(0);
+}
+if (process.argv[2] === "db" && process.argv[3] === "path") {
+  console.log(${JSON.stringify(databasePath)});
+  process.exit(0);
+}
+const database = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
+console.log(JSON.stringify(database.prepare(process.argv[3]).all()));
+`);
+  fs.chmodSync(executable, 0o755);
+
+  assert.deepEqual(
+    collectOpenCode(
+      Date.parse("2026-08-23T17:00:00.000Z"),
+      [executable],
+      [databasePath],
+    ),
+    {
+      sourceFound: true,
+      complete: true,
+      records: [
+        {
+          date: "2026-08-22",
+          tool: "opencode",
+          model: "gpt-5.6-sol",
+          inputTokens: 10,
+          outputTokens: 3,
+          cacheReadTokens: 20,
+          cacheWriteTokens: 0,
+          totalTokens: 33,
+          inputTokenSemantics: "fresh",
+        },
+        {
+          date: "2026-08-23",
+          tool: "opencode",
+          model: "gpt-5.6-sol",
+          inputTokens: 120,
+          outputTokens: 37,
+          cacheReadTokens: 400,
+          cacheWriteTokens: 5,
+          totalTokens: 562,
+          inputTokenSemantics: "fresh",
+        },
+      ],
+    },
+  );
+});
+
+test("OpenCode executable discovery includes the Windows npm shim", () => {
+  const candidates = openCodeExecutableCandidates(
+    "win32",
+    { APPDATA: "C:\\Users\\tester\\AppData\\Roaming" },
+    "C:\\Users\\tester",
+  );
+  assert.ok(candidates.includes("C:\\Users\\tester\\AppData\\Roaming\\npm\\opencode.cmd"));
+});
+
+test("OpenCode collection binds the CLI to one discovered database", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-opencode-multi-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const active = path.join(dir, "opencode.db");
+  const stale = path.join(dir, "opencode-beta.db");
+  fs.writeFileSync(active, "active");
+  fs.writeFileSync(stale, "stale");
+  const executable = path.join(dir, "opencode");
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+if (process.argv[2] === "--version") {
+  console.log("1.18.21");
+  process.exit(0);
+}
+if (process.argv[2] === "db" && process.argv[3] === "path") {
+  console.log(${JSON.stringify(active)});
+  process.exit(0);
+}
+console.log(JSON.stringify([{ date: null, database_path: ${JSON.stringify(active)}, assistant_rows: 1, token_rows: 1, unsupported_rows: 0 }]));
+`);
+  fs.chmodSync(executable, 0o755);
+
+  assert.deepEqual(collectOpenCode(Date.now(), [executable], [active, stale]), {
+    sourceFound: true,
+    complete: true,
+    records: [],
+  });
+  assert.deepEqual(collectOpenCode(Date.now(), [executable], [stale]), {
+    sourceFound: true,
+    complete: false,
+    records: [],
+  });
+});
+
+test("OpenCode collection rejects unsupported token shapes", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-opencode-schema-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const databasePath = path.join(dir, "opencode.db");
+  const database = new DatabaseSync(databasePath);
+  database.exec(`
+    CREATE TABLE message (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      time_created INTEGER NOT NULL,
+      time_updated INTEGER NOT NULL,
+      data TEXT NOT NULL
+    )
+  `);
+  const time = Date.parse("2026-08-23T12:00:00.000Z");
+  database.prepare(
+    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+  ).run("unsupported", "session", time, time, JSON.stringify({
+    role: "assistant",
+    modelID: "future-model",
+    tokens: { total: 100, input: 80, output: 20 },
+    time: { completed: time },
+  }));
+  database.close();
+
+  const executable = path.join(dir, "opencode");
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+const { DatabaseSync } = require("node:sqlite");
+if (process.argv[2] === "--version") {
+  console.log("1.18.21");
+  process.exit(0);
+}
+if (process.argv[2] === "db" && process.argv[3] === "path") {
+  console.log(${JSON.stringify(databasePath)});
+  process.exit(0);
+}
+const database = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
+console.log(JSON.stringify(database.prepare(process.argv[3]).all()));
+`);
+  fs.chmodSync(executable, 0o755);
+
+  assert.deepEqual(collectOpenCode(Date.parse("2026-08-23T17:00:00.000Z"), [executable], [databasePath]), {
+    sourceFound: true,
+    complete: false,
+    records: [],
+  });
+});
+
+test("OpenCode collection rejects completed assistant rows without tokens", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-opencode-missing-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const databasePath = path.join(dir, "opencode.db");
+  const database = new DatabaseSync(databasePath);
+  database.exec(`
+    CREATE TABLE message (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      time_created INTEGER NOT NULL,
+      time_updated INTEGER NOT NULL,
+      data TEXT NOT NULL
+    )
+  `);
+  const time = Date.parse("2026-08-23T12:00:00.000Z");
+  const insert = database.prepare(
+    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+  );
+  insert.run("valid", "session", time, time, JSON.stringify({
+    role: "assistant",
+    modelID: "known-model",
+    tokens: {
+      total: 100,
+      input: 80,
+      output: 20,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    },
+    time: { completed: time },
+  }));
+  insert.run("missing", "session", time, time, JSON.stringify({
+    role: "assistant",
+    modelID: "future-model",
+    time: { completed: time },
+  }));
+  database.close();
+
+  const executable = path.join(dir, "opencode");
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+const { DatabaseSync } = require("node:sqlite");
+if (process.argv[2] === "--version") {
+  console.log("1.18.21");
+  process.exit(0);
+}
+if (process.argv[2] === "db" && process.argv[3] === "path") {
+  console.log(${JSON.stringify(databasePath)});
+  process.exit(0);
+}
+const database = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
+console.log(JSON.stringify(database.prepare(process.argv[3]).all()));
+`);
+  fs.chmodSync(executable, 0o755);
+
+  assert.deepEqual(collectOpenCode(Date.parse("2026-08-23T17:00:00.000Z"), [executable], [databasePath]), {
+    sourceFound: true,
+    complete: false,
+    records: [],
+  });
+});
+
+test("OpenCode collection fails closed for unverified client versions", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "znt-tokenrank-opencode-version-test-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const databasePath = path.join(dir, "opencode.db");
+  fs.writeFileSync(databasePath, "database");
+  const executable = path.join(dir, "opencode");
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+if (process.argv[2] === "--version") console.log("1.19.0");
+else process.exit(2);
+`);
+  fs.chmodSync(executable, 0o755);
+
+  assert.deepEqual(collectOpenCode(Date.now(), [executable], [databasePath]), {
+    sourceFound: true,
+    complete: false,
+    records: [],
+  });
 });
