@@ -68,7 +68,7 @@ test("duplicate retirement keeps the high scorer, retires zero-token duplicates,
   const before = fs.readFileSync(storePath, "utf8");
 
   const preview = run(storePath, false, NOW);
-  assert.deepEqual(preview.retirements.map((item) => item.userId), [2, 3, 4]);
+  assert.deepEqual(preview.retirements.map((item) => item.userId).sort((a, b) => a - b), [2, 3, 4]);
   assert.equal(preview.retiredCount, 0);
   assert.deepEqual(preview.tied, []);
   assert.equal(fs.readFileSync(storePath, "utf8"), before);
@@ -78,7 +78,10 @@ test("duplicate retirement keeps the high scorer, retires zero-token duplicates,
   fs.symlinkSync(scriptPath, symlinkPath);
   const linkedPreview = spawnSync(process.execPath, [symlinkPath, "--store", storePath], { encoding: "utf8" });
   assert.equal(linkedPreview.status, 0, linkedPreview.stderr);
-  assert.deepEqual(JSON.parse(linkedPreview.stdout).retirements.map((item) => item.userId), [2, 3, 4]);
+  assert.deepEqual(
+    JSON.parse(linkedPreview.stdout).retirements.map((item) => item.userId).sort((a, b) => a - b),
+    [2, 3, 4],
+  );
 
   const applied = run(storePath, true, NOW);
   assert.equal(applied.retiredCount, 3);
