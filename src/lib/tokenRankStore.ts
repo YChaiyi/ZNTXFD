@@ -1150,19 +1150,24 @@ export async function getTokenRankLeaderboard(params: {
       if (bValue !== aValue) return bValue - aValue;
       return a.userId - b.userId;
     })
-    .slice(0, LEADERBOARD_LIMIT)
-    .map((entry, index) => {
-      if (board === "total") return { ...entry, rank: index + 1 };
+    .map((entry) => {
+      if (board === "total") return { ...entry };
       const boardScore = entry.byTool[board] ?? 0;
       const ratio = entry.score > 0 ? boardScore / entry.score : 0;
       return {
         ...entry,
-        rank: index + 1,
         score: boardScore,
         norm: Math.round(entry.norm * ratio),
         cost: entry.cost * ratio,
       };
-    });
+    })
+    // Zero-value rows read as noise on a board that sells trust; drop them
+    // so the client's explicit empty state speaks when nobody has usage.
+    .filter((entry) =>
+      (metric === "cost" ? entry.cost : metric === "norm" ? entry.norm : entry.score) > 0,
+    )
+    .slice(0, LEADERBOARD_LIMIT)
+    .map((entry, index) => ({ ...entry, rank: index + 1 }));
 
   return {
     status: 0,
