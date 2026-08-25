@@ -343,6 +343,12 @@ export type DailyTopic = {
   tags: string[];
 };
 
+export type DailyGroupStat = {
+  name: string;
+  message_count: number;
+  active_users: number;
+};
+
 export type DailyReport = {
   date: string;
   title: string;
@@ -350,6 +356,8 @@ export type DailyReport = {
   stats: {
     total_messages: number;
     active_members: number;
+    // Older content bundles predate the per-group breakdown.
+    groups?: DailyGroupStat[];
   };
 };
 
@@ -584,6 +592,36 @@ export function getSearchIndex(): SearchIndexItem[] {
   return JSON.parse(content) as SearchIndexItem[];
 }
 
+// Content bundles generated before the empty-section guard may still carry
+// headings with nothing under them; drop those so pages never render a
+// bare section title.
+export function stripEmptySections(content: string): string {
+  const lines = content.split("\n");
+  const result: string[] = [];
+  let pendingHeading: string | null = null;
+  let pendingBlanks: string[] = [];
+
+  for (const line of lines) {
+    if (/^###\s+/.test(line)) {
+      pendingHeading = line;
+      pendingBlanks = [];
+      continue;
+    }
+    if (pendingHeading !== null) {
+      if (line.trim() === "") {
+        pendingBlanks.push(line);
+        continue;
+      }
+      result.push(pendingHeading, ...pendingBlanks);
+      pendingHeading = null;
+      pendingBlanks = [];
+    }
+    result.push(line);
+  }
+
+  return result.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function getDailyReport(date: string): DailyReport {
   const filePath = contentDataPath(`daily/${date}.json`);
   const content = fs.readFileSync(filePath, "utf8");
@@ -594,6 +632,7 @@ export function getDailyReport(date: string): DailyReport {
     topic.action_items ??= [];
     topic.contributors ??= [];
     topic.tags ??= [];
+    topic.content = stripEmptySections(String(topic.content ?? ""));
   }
   return raw as DailyReport;
 }
@@ -772,7 +811,7 @@ function buildReproductions(item: SearchIndexItem, status: TrustStatus): Reprodu
       tester: "旺总AI",
       level: "AI 初审",
       status: "pending",
-      environment: "日报 JSON / 群精华索引",
+      environment: "期刊 JSON / 群精华索引",
       summary: "已完成结构化抽取，等待人工或专家在真实环境中复现。",
     },
   ];
@@ -932,7 +971,7 @@ function knowledgeIndexToTrustedItem(
     firstSource.date || detail.source_date || detail.updated_at || detail.created_at || raw.updated_at || "",
   );
   const sourceHref = String(firstSource.daily_ref || (sourceDate ? `/daily/${sourceDate}` : "/daily"));
-  const sourceTitle = sourceDate ? `知识日报 ${sourceDate}` : "群精华证据";
+  const sourceTitle = sourceDate ? `期刊 ${sourceDate}` : "群精华证据";
   const rating = String(detail.rating || raw.rating || "");
   const sourceCount = sources.length || Number(raw.source_count || 0) || 1;
   const contributors = uniqueStrings([

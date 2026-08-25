@@ -98,6 +98,26 @@ a {
     color: #bcbcc4;
   }
 
+  /* WCAG 2.5.8: keep the visual size but extend the hit area to at least
+     44x44px on touch devices, without shifting layout. */
+  .touch-target {
+    position: relative;
+  }
+
+  @media (pointer: coarse) {
+    .touch-target::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      height: 100%;
+      width: 100%;
+      min-height: 44px;
+      min-width: 44px;
+      transform: translate(-50%, -50%);
+    }
+  }
+
   .card-hover {
     transition:
       transform 0.2s ease,
