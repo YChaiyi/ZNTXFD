@@ -66,6 +66,13 @@ def check_topic(topic, index):
     if len(as_list(topic.get("tags"))) == 0:
         fail(f"topic {title!r} has no tags")
 
+    for block in re.split(r"^###\s+", content, flags=re.MULTILINE)[1:]:
+        block_lines = block.splitlines()
+        heading = block_lines[0].strip() if block_lines else ""
+        body = "\n".join(block_lines[1:]).strip()
+        if not body:
+            fail(f"topic {title!r} has an empty section: {heading!r}")
+
 
 def main():
     args = parse_args()

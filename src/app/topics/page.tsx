@@ -15,14 +15,14 @@ export default function TopicsPage() {
       <div className="relative mb-6 flex items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground md:text-3xl">
-            弹药库
+            知识脉络
           </h1>
           <p className="mt-2 text-sm text-foreground-muted">
             从全部期刊标签自动聚合的工具、观点、教程、案例和风险提醒
           </p>
         </div>
         <span className="mono-num hidden text-sm text-foreground-muted sm:inline">
-          {topics.length} 个弹药标签
+          {topics.length} 个话题标签
         </span>
       </div>
 

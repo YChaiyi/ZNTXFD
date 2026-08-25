@@ -190,7 +190,7 @@ export default async function DailyPage({ params }: DailyPageProps) {
       tone: "text-purple",
     },
     {
-      label: "弹药索引",
+      label: "本期索引",
       value: report.topics.length,
       type: "topics" as const,
       tone: "text-pink",
@@ -270,7 +270,8 @@ export default async function DailyPage({ params }: DailyPageProps) {
             {images.map((img) => (
               <div
                 key={img.key}
-                className={`glass-card card-hover overflow-hidden hover:border-white/[0.14] ${
+                id={`digest-${img.key}`}
+                className={`glass-card card-hover scroll-mt-24 overflow-hidden hover:border-white/[0.14] ${
                   img.exists ? "" : "border-danger/20 bg-danger/[0.04]"
                 }`}
               >
@@ -320,7 +321,7 @@ export default async function DailyPage({ params }: DailyPageProps) {
       <section className="relative">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-xl font-bold text-foreground">本期弹药索引</h2>
+            <h2 className="text-xl font-bold text-foreground">本期索引</h2>
             <p className="mt-1 text-sm text-foreground-muted">
               用来快速定位本期出现的观点、工具、教程、案例和风险提醒。
             </p>
