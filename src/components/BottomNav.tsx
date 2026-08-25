@@ -45,7 +45,7 @@ const tabs = [
     ),
   },
   {
-    label: "知识",
+    label: "知识库",
     href: "/knowledge",
     icon: (
       <svg
@@ -87,7 +87,7 @@ const tabs = [
     ),
   },
   {
-    label: "Token",
+    label: "Token榜",
     href: "/token-rank",
     icon: (
       <svg
