@@ -67,7 +67,7 @@ export default async function TopicDetailPage({ params }: TopicDetailPageProps) 
         href="/topics"
         className="glass card-hover relative mb-5 inline-flex items-center rounded-full px-3 py-2 text-sm font-medium text-foreground-muted hover:border-white/[0.14] hover:text-accent"
       >
-        ← 返回弹药库
+        ← 返回知识脉络
       </Link>
 
       <header className="glass-card glow-border card-hover relative mb-6 p-5 hover:border-white/[0.14] md:p-7">
@@ -169,7 +169,7 @@ export default async function TopicDetailPage({ params }: TopicDetailPageProps) 
           </section>
 
           <section className="glass-card card-hover p-5 hover:border-white/[0.14]">
-            <h2 className="text-lg font-bold text-foreground">关联弹药标签</h2>
+            <h2 className="text-lg font-bold text-foreground">关联话题标签</h2>
             <div className="mt-4 flex flex-wrap gap-2">
               {topic.relatedTags.length > 0 ? (
                 topic.relatedTags.map((tag) => (

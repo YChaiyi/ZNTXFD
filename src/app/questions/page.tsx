@@ -25,8 +25,8 @@ function QuestionCard({ question }: { question: QuestionItem }) {
       <div className="grid gap-5 lg:grid-cols-[96px_minmax(0,1fr)_280px]">
         <div className="grid grid-cols-2 gap-2 lg:block lg:space-y-3">
           <div className="rounded-[14px] border border-white/[0.06] bg-white/[0.025] p-3 text-center">
-            <p className="mono-num text-2xl font-bold text-accent">{question.votes}%</p>
-            <p className="mt-1 text-xs text-foreground-muted">讨论热度</p>
+            <p className="mono-num text-2xl font-bold text-accent">{question.relatedKnowledge.length}</p>
+            <p className="mt-1 text-xs text-foreground-muted">相关知识</p>
           </div>
           <div className="rounded-[14px] border border-white/[0.06] bg-white/[0.025] p-3 text-center">
             <p className="mono-num text-2xl font-bold text-success">{question.answers}</p>
