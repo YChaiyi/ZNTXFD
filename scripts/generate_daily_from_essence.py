@@ -266,16 +266,21 @@ def tags_for_topic(category_name, items):
 
 
 def action_items_for_topic(topic_tags, group_actions):
+    # Only actions that relate to this topic's tags may appear here. A topic
+    # without matches keeps an empty list so the site hides the section,
+    # instead of padding every topic with the same global defaults.
     matches = []
-    tag_text = " ".join(topic_tags).lower()
+    tag_parts = {
+        part
+        for part in re.split(r"[/、\s]+", " ".join(topic_tags).lower())
+        if len(part) >= 2
+    }
     for action in group_actions:
         action_text = normalize_text(action)
         if not action_text:
             continue
         action_lower = action_text.lower()
-        if any(part and part in action_lower for part in re.split(r"[/、\s]+", tag_text)):
-            matches.append(action_text)
-        elif len(matches) < 2:
+        if any(part in action_lower for part in tag_parts):
             matches.append(action_text)
         if len(matches) >= 3:
             break
@@ -345,7 +350,20 @@ def build_topics(reports):
         )
 
     topics.sort(key=lambda topic: topic.pop("_score"), reverse=True)
-    return topics[:10]
+    topics = topics[:10]
+
+    # An action may match several topics through shared tags; keep it only in
+    # the highest-scored topic so categories never repeat each other.
+    seen_actions = set()
+    for topic in topics:
+        unique_actions = []
+        for action in topic["action_items"]:
+            if action not in seen_actions:
+                seen_actions.add(action)
+                unique_actions.append(action)
+        topic["action_items"] = unique_actions
+
+    return topics
 
 
 def build_title(topics):
