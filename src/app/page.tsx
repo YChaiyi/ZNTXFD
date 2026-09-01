@@ -349,7 +349,7 @@ export default async function Home() {
 
               <section>
                 <SectionTitle
-                  title="今日五群精华"
+                  title={`今日${digestStatus.totalCount}群精华`}
                   meta={formatDate(latest.date)}
                   href={`/daily/${latest.date}`}
                   cta="全部日报 →"

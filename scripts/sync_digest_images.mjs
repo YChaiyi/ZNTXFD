@@ -32,6 +32,7 @@ const groups = [
   { key: "group3", label: "三群", dir: "智能体先锋队三群-群精华项目", activeFrom: "2026-06-14" },
   { key: "group4", label: "四群", dir: "智能体先锋队四群-群精华项目", activeFrom: "2026-06-20" },
   { key: "group5", label: "五群", dir: "智能体先锋队五群-群精华项目", activeFrom: "2026-07-15" },
+  { key: "group6", label: "六群", dir: "智能体先锋队六群-群精华项目", activeFrom: "2026-08-16" },
 ];
 
 function findSource(group) {

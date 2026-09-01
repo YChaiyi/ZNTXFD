@@ -23,7 +23,7 @@ function isValidDate(value: string) {
 
 export async function GET(_request: Request, { params }: RouteContext) {
   const { date, filename } = await params;
-  const match = /^(group[1-5])\.(avif|png)$/.exec(filename);
+  const match = /^(group[1-6])\.(avif|png)$/.exec(filename);
   if (!isValidDate(date) || !match) {
     return new NextResponse(null, { status: 404 });
   }
