@@ -261,10 +261,16 @@ export function TopBar() {
             <SearchIcon className="h-5 w-5 shrink-0" />
             <span className="truncate">搜索弹药...</span>
           </Link>
-          <span className="hidden items-center gap-2 text-sm font-medium text-foreground-muted sm:inline-flex">
+          <span className="hidden items-center gap-2 text-sm font-medium text-foreground-muted xl:inline-flex">
             <span className="pulse-dot" aria-hidden="true" />
             持续沉淀
           </span>
+          <a
+            href="#join"
+            className="inline-flex h-10 shrink-0 items-center rounded-lg bg-gradient-to-b from-accent-light to-accent px-4 text-sm font-black text-background transition-transform hover:-translate-y-0.5"
+          >
+            加入社群
+          </a>
         </div>
       </div>
     </header>
