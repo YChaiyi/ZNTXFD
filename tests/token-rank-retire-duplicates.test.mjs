@@ -7,7 +7,11 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { run } from "../ops/bin/znt-token-rank-retire-duplicates.mjs";
 
-const NOW = Date.parse("2026-07-29T04:00:00.000Z");
+const NOW = Date.now();
+const TODAY = new Date(NOW + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+const STALE_DATE = new Date(
+  Date.parse(`${TODAY}T00:00:00Z`) - 31 * 24 * 60 * 60 * 1000,
+).toISOString().slice(0, 10);
 
 function user(userId, tokenHash, name) {
   return {
@@ -55,8 +59,8 @@ test("duplicate retirement keeps the high scorer, retires zero-token duplicates,
       user(5, "fresh", "新用户"),
     ],
     records: [
-      record("high", 1, "2026-07-29", 16574061096),
-      record("low", 2, "2026-06-29", 999),
+      record("high", 1, TODAY, 16574061096),
+      record("low", 2, STALE_DATE, 999),
     ],
     collectors: [
       { userId: 2, tokenHash: "low", deviceId: "device-2", tool: "codex" },
