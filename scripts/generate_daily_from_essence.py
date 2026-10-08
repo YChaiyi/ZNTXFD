@@ -28,6 +28,7 @@ GROUPS = [
     {"name": "智能体先锋队—大湾区小分队", "active_from": "2026-09-27"},
     {"name": "智能体先锋队十群", "active_from": "2026-10-05"},
     {"name": "智能体先锋队十一群", "active_from": "2026-10-06"},
+    {"name": "智能体先锋队十五群", "active_from": "2026-10-08"},
 ]
 
 CATEGORY_RULES = [

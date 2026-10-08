@@ -86,6 +86,13 @@ GROUPS = [
         "name": "智能体先锋队十一群",
         "active_from": "2026-10-06",
     },
+    {
+        "key": "group15",
+        "short": "g15",
+        "label": "十五群",
+        "name": "智能体先锋队十五群",
+        "active_from": "2026-10-08",
+    },
 ]
 
 CATEGORY_RULES = [
