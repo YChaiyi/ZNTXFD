@@ -24,6 +24,10 @@ GROUPS = [
     {"name": "智能体先锋队三群", "active_from": "2026-06-14"},
     {"name": "智能体先锋队四群", "active_from": "2026-06-20"},
     {"name": "智能体先锋队五群", "active_from": "2026-07-15"},
+    {"name": "智能体先锋队六群", "active_from": "2026-08-16"},
+    {"name": "智能体先锋队—大湾区小分队", "active_from": "2026-09-27"},
+    {"name": "智能体先锋队十群", "active_from": "2026-10-05"},
+    {"name": "智能体先锋队十一群", "active_from": "2026-10-06"},
 ]
 
 CATEGORY_RULES = [
