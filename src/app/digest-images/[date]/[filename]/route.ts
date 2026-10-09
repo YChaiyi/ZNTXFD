@@ -2,6 +2,7 @@ import fs from "fs";
 import { NextResponse } from "next/server";
 import {
   ContentUnavailableError,
+  getActiveDigestGroups,
   getDigestImageFilePath,
 } from "@/lib/data";
 
@@ -23,8 +24,12 @@ function isValidDate(value: string) {
 
 export async function GET(_request: Request, { params }: RouteContext) {
   const { date, filename } = await params;
-  const match = /^(group[1-6])\.(avif|png)$/.exec(filename);
-  if (!isValidDate(date) || !match) {
+  const match = /^([a-z0-9-]+)\.(avif|png)$/.exec(filename);
+  if (
+    !isValidDate(date) ||
+    !match ||
+    !getActiveDigestGroups(date).some((group) => group.key === match[1])
+  ) {
     return new NextResponse(null, { status: 404 });
   }
 
