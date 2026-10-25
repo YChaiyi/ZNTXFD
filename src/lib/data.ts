@@ -579,6 +579,12 @@ export const DIGEST_GROUPS: DigestGroup[] = [
     activeFrom: "2026-09-27",
   },
   {
+    key: "group8",
+    label: "八群",
+    name: "智能体先锋队八群",
+    activeFrom: "2026-10-25",
+  },
+  {
     key: "group10",
     label: "十群",
     name: "智能体先锋队十群",
