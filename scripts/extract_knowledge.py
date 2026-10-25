@@ -73,6 +73,13 @@ GROUPS = [
         "active_from": "2026-09-27",
     },
     {
+        "key": "group8",
+        "short": "g8",
+        "label": "八群",
+        "name": "智能体先锋队八群",
+        "active_from": "2026-10-25",
+    },
+    {
         "key": "group10",
         "short": "g10",
         "label": "十群",
